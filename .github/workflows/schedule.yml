@@ -1,0 +1,23 @@
+name: 주식 이슈 브리핑
+
+on:
+  schedule:
+    # UTC 기준 00:00, 12:00 → 한국시간(KST) 오전 9시, 오후 9시 (12시간마다)
+    - cron: "0 0,12 * * *"
+  workflow_dispatch: {}   # 깃허브에서 수동으로 "지금 실행" 버튼도 가능
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - run: python main.py
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
