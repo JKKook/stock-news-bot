@@ -7,7 +7,7 @@
 from datetime import datetime, timezone, timedelta
 
 import config
-from collect import collect, build_headlines
+from collect import collect, build_headlines, yahoo_headline
 from notify import build_messages, send
 
 
@@ -25,6 +25,7 @@ def main() -> None:
     header = f"📰 **주식 이슈 브리핑** — {kst:%Y-%m-%d %H:%M} (KST)"
 
     print("뉴스 수집 중...")
+    yahoo = yahoo_headline()
     market = collect(config.MARKET_QUERIES, config.MAX_MARKET)
     sectors = collect(_flatten_sectors(), config.MAX_SECTOR)
     tickers = collect(config.TICKERS, config.MAX_TICKER)
@@ -37,7 +38,7 @@ def main() -> None:
         print("최근 새 뉴스가 없어 발송을 건너뜁니다.")
         return
 
-    messages = build_messages(header, headlines, market, sectors, tickers)
+    messages = build_messages(header, yahoo, headlines, market, sectors, tickers)
     send(messages)
 
 

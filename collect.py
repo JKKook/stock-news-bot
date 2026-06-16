@@ -1,21 +1,27 @@
-"""구글 뉴스 RSS에서 주식 관련 뉴스를 모으는 모듈 (무료, API 키 불필요)."""
+"""뉴스 수집 모듈.
 
+· 본문 발췌(요약문)는 Bing 뉴스 RSS에서 가져온다 (무료, API 키 불필요).
+· 대표 링크 1개는 Yahoo Finance 헤드라인 RSS에서 가져온다.
+"""
+
+import re
+import html
 import time
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 
 import feedparser
 
-from config import LOOKBACK_HOURS
+from config import LOOKBACK_HOURS, EXCERPT_MAX_LEN
 
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+_YAHOO_RSS = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US"
 
 
-def _rss_url(query: str, lang: str) -> str:
+def _bing_url(query: str, lang: str) -> str:
     q = urllib.parse.quote(query)
-    if lang == "ko":
-        return f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
-    return f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
+    loc = "ko" if lang == "ko" else "en-US"
+    return f"https://www.bing.com/news/search?q={q}&format=rss&setlang={loc}"
 
 
 def _published(entry):
@@ -25,42 +31,58 @@ def _published(entry):
     return datetime.fromtimestamp(time.mktime(parsed), tz=timezone.utc)
 
 
-def _clean_title(entry) -> str:
-    # 줄바꿈·연속 공백을 한 칸으로 정리
-    title = " ".join(entry.get("title", "").split())
-    source = (entry.get("source", {}) or {}).get("title") if entry.get("source") else None
-    if source and title.endswith(f" - {source}"):
-        title = title[: -(len(source) + 3)]
-    return title
+def _clean_text(text: str, maxlen: int = 0) -> str:
+    text = re.sub(r"<[^>]+>", "", text or "")   # HTML 태그 제거
+    text = html.unescape(text)
+    text = " ".join(text.split())               # 줄바꿈·연속공백 정리
+    if maxlen and len(text) > maxlen:
+        text = text[:maxlen].rsplit(" ", 1)[0] + "…"
+    return text
+
+
+def _source(entry) -> str:
+    src = entry.get("source")
+    if isinstance(src, dict):
+        return src.get("title", "") or ""
+    return ""
 
 
 def collect(queries, max_items: int) -> list[dict]:
     """
     queries: [(라벨, 검색어, 언어, 지역), ...]
-    반환: [{"label", "region", "items": [{title, link, source, published, region}]}, ...]
+    반환: [{"label", "region", "items": [{title, excerpt, source, published, region}]}, ...]
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
     results = []
 
     for label, query, lang, region in queries:
-        feed = feedparser.parse(_rss_url(query, lang))
-        items = []
-        for entry in feed.entries:
-            pub = _published(entry)
-            if pub and pub < cutoff:
-                continue
-            items.append({
-                "title": _clean_title(entry),
-                "link": entry.get("link", "").strip(),
-                "source": (entry.get("source", {}) or {}).get("title", ""),
-                "published": pub,
+        feed = feedparser.parse(_bing_url(query, lang))
+        entries = sorted(feed.entries, key=lambda e: _published(e) or _EPOCH, reverse=True)
+
+        def to_item(e):
+            return {
+                "title": _clean_text(e.get("title", "")),
+                "excerpt": _clean_text(e.get("summary", ""), EXCERPT_MAX_LEN),
+                "source": _source(e),
+                "published": _published(e),
                 "region": region,
-            })
-            if len(items) >= max_items:
-                break
-        results.append({"label": label, "region": region, "items": items})
+            }
+
+        recent = [to_item(e) for e in entries if (_published(e) or _EPOCH) >= cutoff]
+        # 최근 기사가 없으면 가장 최신 기사라도 채운다(빈 섹션 방지)
+        chosen = (recent or [to_item(e) for e in entries])[:max_items]
+        results.append({"label": label, "region": region, "items": chosen})
 
     return results
+
+
+def yahoo_headline() -> dict | None:
+    """Yahoo Finance 최신 대표 헤드라인 1건 (제목 + 실제 링크)."""
+    feed = feedparser.parse(_YAHOO_RSS)
+    if not feed.entries:
+        return None
+    e = sorted(feed.entries, key=lambda x: _published(x) or _EPOCH, reverse=True)[0]
+    return {"title": _clean_text(e.get("title", "")), "link": e.get("link", "").strip()}
 
 
 def _shorten(title: str, maxlen: int) -> str:
@@ -74,7 +96,7 @@ def _shorten(title: str, maxlen: int) -> str:
 
 
 def build_headlines(pool: list[dict], count: int, maxlen: int) -> list[str]:
-    """모든 기사를 모아 최신순 정렬 → '지역_짧은제목' 형태로 상위 N개 반환."""
+    """모든 기사를 최신순 정렬 → '지역_짧은제목' 형태로 상위 N개 반환."""
     ordered = sorted(pool, key=lambda it: it["published"] or _EPOCH, reverse=True)
     out, seen = [], set()
     for it in ordered:
