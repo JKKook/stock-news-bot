@@ -95,17 +95,21 @@ def _shorten(title: str, maxlen: int) -> str:
     return cut + "…"
 
 
-def build_headlines(pool: list[dict], count: int, maxlen: int) -> list[str]:
-    """모든 기사를 최신순 정렬 → '지역_짧은제목' 형태로 상위 N개 반환."""
+def build_headlines(pool: list[dict], per_region: int, maxlen: int) -> dict:
+    """모든 기사를 최신순 정렬 → 지역별(국내/해외)로 상위 N개씩 짧은 제목 반환."""
     ordered = sorted(pool, key=lambda it: it["published"] or _EPOCH, reverse=True)
-    out, seen = [], set()
+    groups = {"국내": [], "해외": []}
+    seen = set()
     for it in ordered:
+        region = it["region"]
+        if region not in groups or len(groups[region]) >= per_region:
+            continue
         short = _shorten(it["title"], maxlen)
         key = short.replace(" ", "")
         if not key or key in seen:
             continue
         seen.add(key)
-        out.append(f"{it['region']}_{short}")
-        if len(out) >= count:
+        groups[region].append(short)
+        if all(len(v) >= per_region for v in groups.values()):
             break
-    return out
+    return groups

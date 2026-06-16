@@ -30,9 +30,9 @@ def main() -> None:
     sectors = collect(_flatten_sectors(), config.MAX_SECTOR)
     tickers = collect(config.TICKERS, config.MAX_TICKER)
 
-    # 헤드라인: 모든 기사를 모아 최신순 상위 N개
+    # 헤드라인: 모든 기사를 모아 지역별 최신순 상위 N개씩
     pool = [it for g in (market + sectors + tickers) for it in g["items"]]
-    headlines = build_headlines(pool, config.HEADLINE_COUNT, config.HEADLINE_MAX_LEN)
+    headlines = build_headlines(pool, config.HEADLINE_PER_REGION, config.HEADLINE_MAX_LEN)
 
     if not pool:
         print("최근 새 뉴스가 없어 발송을 건너뜁니다.")

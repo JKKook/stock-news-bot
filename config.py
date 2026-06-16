@@ -9,8 +9,8 @@
 LOOKBACK_HOURS = 24
 
 # ── 블록별 기사 개수 ────────────────────────────────────────────
-HEADLINE_COUNT = 10     # 1) 헤드라인 개수
-HEADLINE_MAX_LEN = 30   # 1) 헤드라인 한 줄 최대 글자 수 (30자 미만)
+HEADLINE_PER_REGION = 5  # 1) 헤드라인 — 국내/해외 각각 몇 개씩
+HEADLINE_MAX_LEN = 30    # 1) 헤드라인 한 줄 최대 글자 수 (30자 미만)
 MAX_MARKET = 2          # 2) 시장 항목당 기사 수
 MAX_SECTOR = 2          # 3) 섹터·지역당 기사 수
 MAX_TICKER = 2          # 4) 종목당 기사 수
