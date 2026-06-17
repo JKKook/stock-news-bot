@@ -14,6 +14,8 @@ from config import EXCERPT_MAX_LEN
 
 DISCORD_LIMIT = 1900  # 디스코드 메시지 길이 제한(2000)보다 약간 작게
 
+SEPARATOR = "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"  # 구분선(점선)
+
 REGIONS = [("국내", "# 🇰🇷 국내 증시"), ("해외", "# 🇺🇸 해외 증시")]
 
 
@@ -105,8 +107,8 @@ def _emit(blocks: list[list[str]]) -> list[str]:
     return messages
 
 
-def build_messages(header, yahoo, headlines, market, sectors, tickers) -> list[str]:
-    blocks = [[header]]
+def build_messages(header, today, yahoo, headlines, market, sectors, tickers) -> list[str]:
+    blocks = [[SEPARATOR, header]]  # 맨 앞 구분선
 
     # 0) 대표 링크 — Yahoo Finance 헤드라인 1개 (브리핑 내 유일한 링크)
     if yahoo:
@@ -117,7 +119,7 @@ def build_messages(header, yahoo, headlines, market, sectors, tickers) -> list[s
 
     # 1) 오늘의 헤드라인 — 국내/해외 분리
     if headlines and (headlines.get("국내") or headlines.get("해외")):
-        hb = ["## 🔥 오늘의 헤드라인"]
+        hb = [f"## 🔥 오늘의 헤드라인 ({today})"]
         for region, flag in [("국내", "🇰🇷"), ("해외", "🇺🇸")]:
             hs = headlines.get(region) or []
             if hs:
@@ -145,6 +147,7 @@ def build_messages(header, yahoo, headlines, market, sectors, tickers) -> list[s
         if m or sectors_grouped or t:
             blocks += _region_blocks(title, m, sectors_grouped, t)
 
+    blocks.append([SEPARATOR])  # 맨 뒤 구분선
     return _emit(blocks)
 
 

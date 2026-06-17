@@ -24,6 +24,7 @@ def _flatten_sectors():
 
 def main() -> None:
     kst = datetime.now(timezone.utc) + timedelta(hours=9)
+    today = f"{kst:%Y-%m-%d}"
     header = f"📰 **주식 이슈 브리핑** — {kst:%Y-%m-%d %H:%M} (KST)"
 
     print("뉴스 수집 중...")
@@ -49,7 +50,7 @@ def main() -> None:
     # 헤드라인: (번역된) 기사를 지역별 최신순 상위 N개씩
     headlines = build_headlines(pool, config.HEADLINE_PER_REGION, config.HEADLINE_MAX_LEN)
 
-    messages = build_messages(header, yahoo, headlines, market, sectors, tickers)
+    messages = build_messages(header, today, yahoo, headlines, market, sectors, tickers)
     send(messages)
 
 
