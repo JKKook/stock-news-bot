@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 
 import feedparser
 
-from config import LOOKBACK_HOURS, EXCERPT_MAX_LEN
+from config import LOOKBACK_HOURS
 
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 _YAHOO_RSS = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US"
@@ -62,10 +62,11 @@ def collect(queries, max_items: int) -> list[dict]:
         def to_item(e):
             return {
                 "title": _clean_text(e.get("title", "")),
-                "excerpt": _clean_text(e.get("summary", ""), EXCERPT_MAX_LEN),
+                "excerpt": _clean_text(e.get("summary", "")),  # 번역 후 표시 단계에서 자름
                 "source": _source(e),
                 "published": _published(e),
                 "region": region,
+                "lang": lang,
             }
 
         recent = [to_item(e) for e in entries if (_published(e) or _EPOCH) >= cutoff]

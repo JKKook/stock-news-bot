@@ -10,19 +10,34 @@ import os
 import time
 import requests
 
+from config import EXCERPT_MAX_LEN
+
 DISCORD_LIMIT = 1900  # 디스코드 메시지 길이 제한(2000)보다 약간 작게
 
 REGIONS = [("국내", "# 🇰🇷 국내 증시"), ("해외", "# 🇺🇸 해외 증시")]
 
 
+def _cut(text: str, maxlen: int) -> str:
+    text = text.strip()
+    if len(text) <= maxlen:
+        return text
+    cut = text[:maxlen]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut + "…"
+
+
 def _item_blocks(items: list[dict]) -> list[list[str]]:
-    """기사 1건 = ['• 제목 (출처)', '> 발췌문'] 묶음. 이 묶음은 분할되지 않는다."""
+    """기사 1건 = ['• 제목 (출처)', '발췌문', ''] 묶음. 이 묶음은 분할되지 않는다.
+    제목과 발췌문은 줄을 나누고, 기사 사이에는 빈 줄을 둔다.
+    """
     blocks = []
     for it in items:
         src = f" ({it['source']})" if it["source"] else ""
         block = [f"• {it['title']}{src}"]
         if it["excerpt"]:
-            block.append(f"> {it['excerpt']}")
+            block.append(_cut(it["excerpt"], EXCERPT_MAX_LEN))
+        block.append("")  # 기사 사이 빈 줄
         blocks.append(block)
     return blocks
 
