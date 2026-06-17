@@ -18,10 +18,12 @@ _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 _YAHOO_RSS = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US"
 
 
-def _bing_url(query: str, lang: str) -> str:
+def _gnews_url(query: str, lang: str) -> str:
+    """구글 뉴스 검색 RSS (Bing보다 신선함). 발췌문은 제공 안 함."""
     q = urllib.parse.quote(query)
-    loc = "ko" if lang == "ko" else "en-US"
-    return f"https://www.bing.com/news/search?q={q}&format=rss&setlang={loc}"
+    if lang == "ko":
+        return f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+    return f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
 
 
 def _published(entry):
@@ -40,6 +42,15 @@ def _clean_text(text: str, maxlen: int = 0) -> str:
     return text
 
 
+def _clean_title(entry) -> str:
+    """제목 정리 + 구글뉴스 끝의 ' - 언론사' 꼬리표 제거."""
+    title = _clean_text(entry.get("title", ""))
+    source = _source(entry)
+    if source and title.endswith(f" - {source}"):
+        title = title[: -(len(source) + 3)]
+    return title
+
+
 def _source(entry) -> str:
     src = entry.get("source")
     if isinstance(src, dict):
@@ -56,23 +67,22 @@ def collect(queries, max_items: int) -> list[dict]:
     results = []
 
     for label, query, lang, region in queries:
-        feed = feedparser.parse(_bing_url(query, lang))
+        feed = feedparser.parse(_gnews_url(query, lang))
         entries = sorted(feed.entries, key=lambda e: _published(e) or _EPOCH, reverse=True)
 
         def to_item(e):
             return {
-                "title": _clean_text(e.get("title", "")),
-                "excerpt": _clean_text(e.get("summary", "")),  # 번역 후 표시 단계에서 자름
+                "title": _clean_title(e),
+                "excerpt": "",  # 구글 뉴스는 본문 발췌문 미제공
                 "source": _source(e),
                 "published": _published(e),
                 "region": region,
                 "lang": lang,
             }
 
+        # 최근 LOOKBACK_HOURS 이내 기사만 (오래된 기사는 섞지 않음)
         recent = [to_item(e) for e in entries if (_published(e) or _EPOCH) >= cutoff]
-        # 최근 기사가 없으면 가장 최신 기사라도 채운다(빈 섹션 방지)
-        chosen = (recent or [to_item(e) for e in entries])[:max_items]
-        results.append({"label": label, "region": region, "items": chosen})
+        results.append({"label": label, "region": region, "items": recent[:max_items]})
 
     return results
 

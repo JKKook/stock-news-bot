@@ -28,8 +28,8 @@ def _cut(text: str, maxlen: int) -> str:
 
 
 def _item_blocks(items: list[dict]) -> list[list[str]]:
-    """기사 1건 = ['• 제목 (출처)', '발췌문', ''] 묶음. 이 묶음은 분할되지 않는다.
-    제목과 발췌문은 줄을 나누고, 기사 사이에는 빈 줄을 둔다.
+    """기사 1건 = ['• 제목 (출처)'] (발췌문 있으면 다음 줄) 묶음. 묶음은 분할되지 않는다.
+    같은 소제목 안의 기사들은 붙이고, 그룹 끝에 빈 줄을 둬 다음 소제목과 분리한다.
     """
     blocks = []
     for it in items:
@@ -37,8 +37,9 @@ def _item_blocks(items: list[dict]) -> list[list[str]]:
         block = [f"• {it['title']}{src}"]
         if it["excerpt"]:
             block.append(_cut(it["excerpt"], EXCERPT_MAX_LEN))
-        block.append("")  # 기사 사이 빈 줄
         blocks.append(block)
+    if blocks:
+        blocks[-1] = blocks[-1] + [""]  # 그룹 끝 빈 줄
     return blocks
 
 
