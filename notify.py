@@ -14,7 +14,7 @@ from config import EXCERPT_MAX_LEN
 
 DISCORD_LIMIT = 1900  # 디스코드 메시지 길이 제한(2000)보다 약간 작게
 
-SEPARATOR = "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"  # 구분선(점선)
+SEPARATOR = "┄" * 42  # 구분선(점선) — 길게 꽉 채움
 
 REGIONS = [("국내", "# 🇰🇷 국내 증시"), ("해외", "# 🇺🇸 해외 증시")]
 
