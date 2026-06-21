@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 
 import config
 from collect import collect, build_headlines, yahoo_headline
+from market import get_indices, get_fear_greed
 from issues import filter_issues
 from translate import translate_items, translate_text
 from notify import build_messages, send
@@ -27,7 +28,9 @@ def main() -> None:
     today = f"{kst:%Y-%m-%d}"
     header = f"📰 **주식 이슈 브리핑** — {kst:%Y-%m-%d %H:%M} (KST)"
 
-    print("뉴스 수집 중...")
+    print("시세·뉴스 수집 중...")
+    indices = get_indices(config.INDICES)
+    fear_greed = get_fear_greed()
     yahoo = yahoo_headline()
     market = collect(config.MARKET_QUERIES, config.MAX_MARKET)
     sectors = collect(_flatten_sectors(), config.MAX_SECTOR)
@@ -50,7 +53,7 @@ def main() -> None:
     # 헤드라인: (번역된) 기사를 지역별 최신순 상위 N개씩
     headlines = build_headlines(pool, config.HEADLINE_PER_REGION, config.HEADLINE_MAX_LEN)
 
-    messages = build_messages(header, today, yahoo, headlines, market, sectors, tickers)
+    messages = build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers)
     send(messages)
 
 

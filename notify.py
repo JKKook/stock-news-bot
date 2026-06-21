@@ -19,6 +19,53 @@ SEPARATOR = "┄" * 42  # 구분선(점선) — 길게 꽉 채움
 REGIONS = [("국내", "# 🇰🇷 국내 증시"), ("해외", "# 🇺🇸 해외 증시")]
 
 
+def _fmt_chg(c: float) -> str:
+    arrow = "▲" if c > 0 else ("▼" if c < 0 else "─")
+    return f"{arrow} {c:+.2f}%"
+
+
+def _fg_zone(score: float):
+    if score < 25:
+        return "극단적 공포", "😱"
+    if score < 45:
+        return "공포", "😨"
+    if score <= 55:
+        return "중립", "😐"
+    if score < 75:
+        return "탐욕", "🤑"
+    return "극단적 탐욕", "🤩"
+
+
+def _dashboard_blocks(indices, fear_greed) -> list[list[str]]:
+    """맨 위 대시보드: 주요 지수 시세 + CNN 공포탐욕지수."""
+    blocks = []
+    if indices:
+        b = ["## 📊 주요 지수 시세"]
+        for ix in indices:
+            b.append(f"{ix['flag']} **{ix['name']}**  {ix['price']:,.2f}  {_fmt_chg(ix['chg'])}")
+        blocks.append(b)
+
+    if fear_greed and fear_greed.get("score") is not None:
+        score = fear_greed["score"]
+        zone, emoji = _fg_zone(score)
+        filled = round(score / 100 * 20)
+        bar = "█" * filled + "░" * (20 - filled)
+        fb = [
+            f"## {emoji} 공포탐욕지수 (CNN)",
+            f"**{score:.0f} / 100 — {zone} ({fear_greed['rating'].title()})**",
+            f"`[{bar}]`",
+        ]
+        hist = []
+        for label, key in [("어제", "prev"), ("1주 전", "week"), ("한달 전", "month"), ("1년 전", "year")]:
+            v = fear_greed.get(key)
+            if v is not None:
+                hist.append(f"{label} {v:.0f}")
+        if hist:
+            fb.append(" · ".join(hist))
+        blocks.append(fb)
+    return blocks
+
+
 def _cut(text: str, maxlen: int) -> str:
     text = text.strip()
     if len(text) <= maxlen:
@@ -64,7 +111,7 @@ def _section(header: str, labeled_groups: list) -> list[list[str]]:
 def _region_blocks(title, market, sectors_grouped, tickers) -> list[list[str]]:
     blocks = [[title]]
     if market:
-        blocks += _section("## 📊 시장 지수",
+        blocks += _section("## 📰 시장 뉴스",
                            [(f"**{g['label']}**", g["items"]) for g in market])
     if sectors_grouped:
         blocks += _section("## 🏭 섹터별 소식",
@@ -107,8 +154,11 @@ def _emit(blocks: list[list[str]]) -> list[str]:
     return messages
 
 
-def build_messages(header, today, yahoo, headlines, market, sectors, tickers) -> list[str]:
+def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers) -> list[str]:
     blocks = [[SEPARATOR, header]]  # 맨 앞 구분선
+
+    # 📊 맨 위 대시보드 — 주요 지수 시세 + 공포탐욕지수
+    blocks += _dashboard_blocks(indices, fear_greed)
 
     # 0) 대표 링크 — Yahoo Finance 헤드라인 1개 (브리핑 내 유일한 링크)
     if yahoo:
