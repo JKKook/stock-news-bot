@@ -178,16 +178,15 @@ def _source_blocks(source_links: dict) -> list[list[str]]:
         items = source_links.get(region) or []
         if not items:
             continue
-        def line(t, l):
-            t = t if len(t) <= 70 else t[:69] + "…"
-            return f"- [{t}]({l})"
-        lead = [f"**[{label}]**", line(*items[0])]
+        def entry(t, l):
+            return [f"- {t}", f"<{l}>"]  # 제목 + 평문 링크(임베드 아님)
+        lead = [f"**[{label}]**"] + entry(*items[0])
         if not header_done:
             lead = ["## 🔗 Source (주요 기사 링크)"] + lead
             header_done = True
         blocks.append(lead)
         for t, l in items[1:]:
-            blocks.append([line(t, l)])
+            blocks.append(entry(t, l))
     return blocks
 
 
