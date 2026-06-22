@@ -7,7 +7,7 @@
 from datetime import datetime, timezone, timedelta
 
 import config
-from collect import collect, build_headlines, yahoo_headline
+from collect import collect, build_headlines, yahoo_headline, bloomberg_items, build_source_links
 from market import get_indices, get_fear_greed
 from issues import filter_issues
 from translate import translate_items, translate_text
@@ -39,8 +39,11 @@ def main() -> None:
     # 5) 관심 종목은 '특정 이슈' 기사만 선별 (이슈 없는 종목은 표시 안 함)
     tickers = filter_issues(tickers, config.MAX_TICKER)
 
+    # 블룸버그 공식 RSS (해외 섹션용)
+    bloomberg = bloomberg_items(config.BLOOMBERG_FEEDS, config.MAX_BLOOMBERG)
+
     # 표시할 모든 기사를 모아 영어 → 한국어 번역
-    pool = [it for g in (market + sectors + tickers) for it in g["items"]]
+    pool = [it for g in (market + sectors + tickers) for it in g["items"]] + bloomberg
     print(f"번역 중... (총 {len(pool)}건)")
     translate_items(pool)
     if yahoo:
@@ -50,10 +53,12 @@ def main() -> None:
         print("표시할 뉴스가 없어 발송을 건너뜁니다.")
         return
 
-    # 헤드라인: (번역된) 기사를 지역별 최신순 상위 N개씩
+    # 헤드라인 + Source 링크: (번역된) 기사를 지역별 최신순으로
     headlines = build_headlines(pool, config.HEADLINE_PER_REGION, config.HEADLINE_MAX_LEN)
+    source_links = build_source_links(pool, config.SOURCE_PER_REGION)
 
-    messages = build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers)
+    messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
+                              market, sectors, tickers, bloomberg, source_links)
     send(messages)
 
 

@@ -154,7 +154,44 @@ def _emit(blocks: list[list[str]]) -> list[str]:
     return messages
 
 
-def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers) -> list[str]:
+def _bloomberg_blocks(items: list[dict]) -> list[list[str]]:
+    """해외 섹션 내 블룸버그 하위 섹션: 제목 + 요약(번역) + <링크>."""
+    out = []
+    for i, it in enumerate(items):
+        b = [f"• {it['title']} (Bloomberg)"]
+        if it.get("excerpt"):
+            b.append(_cut(it["excerpt"], EXCERPT_MAX_LEN))
+        if it.get("link"):
+            b.append(f"<{it['link']}>")
+        if i == 0:
+            b = ["## 🏦 블룸버그 주요 기사"] + b  # 헤더를 첫 기사와 묶어 고아 방지
+        out.append(b)
+    return out
+
+
+def _source_blocks(source_links: dict) -> list[list[str]]:
+    """맨 끝 Source 모음 — 한국/미국, 한 줄짜리 마스크 링크."""
+    if not (source_links.get("국내") or source_links.get("해외")):
+        return []
+    blocks, header_done = [], False
+    for region, label in [("국내", "🇰🇷 한국"), ("해외", "🇺🇸 미국")]:
+        items = source_links.get(region) or []
+        if not items:
+            continue
+        def line(t, l):
+            t = t if len(t) <= 70 else t[:69] + "…"
+            return f"- [{t}]({l})"
+        lead = [f"**[{label}]**", line(*items[0])]
+        if not header_done:
+            lead = ["## 🔗 Source (주요 기사 링크)"] + lead
+            header_done = True
+        blocks.append(lead)
+        for t, l in items[1:]:
+            blocks.append([line(t, l)])
+    return blocks
+
+
+def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links) -> list[str]:
     blocks = [[SEPARATOR, header]]  # 맨 앞 구분선
 
     # 📊 맨 위 대시보드 — 주요 지수 시세 + 공포탐욕지수
@@ -193,9 +230,14 @@ def build_messages(header, today, indices, fear_greed, yahoo, headlines, market,
         sectors_grouped = [(lbl, sg[lbl]) for lbl in order]
 
         t = [g for g in tickers if g["region"] == region and g["items"]]
+        bb = bloomberg if region == "해외" else []  # 블룸버그는 해외 섹션에만
 
-        if m or sectors_grouped or t:
+        if m or sectors_grouped or t or bb:
             blocks += _region_blocks(title, m, sectors_grouped, t)
+            blocks += _bloomberg_blocks(bb)
+
+    # 맨 끝 Source 링크 모음
+    blocks += _source_blocks(source_links)
 
     blocks.append([SEPARATOR])  # 맨 뒤 구분선
     return _emit(blocks)

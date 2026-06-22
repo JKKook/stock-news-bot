@@ -75,6 +75,7 @@ def collect(queries, max_items: int) -> list[dict]:
                 "title": _clean_title(e),
                 "excerpt": "",  # 구글 뉴스는 본문 발췌문 미제공
                 "source": _source(e),
+                "link": e.get("link", "").strip(),
                 "published": _published(e),
                 "region": region,
                 "lang": lang,
@@ -104,6 +105,56 @@ def _shorten(title: str, maxlen: int) -> str:
     if " " in cut:
         cut = cut.rsplit(" ", 1)[0]
     return cut + "…"
+
+
+def bloomberg_items(feeds, max_items: int) -> list[dict]:
+    """블룸버그 공식 RSS에서 최신 기사 — 제목 + 퍼블리셔 제공 요약 + 링크.
+    (스크래핑 아님: 블룸버그가 신디케이션용으로 공개한 피드)"""
+    entries = []
+    for url in feeds:
+        for e in feedparser.parse(url).entries:
+            entries.append(e)
+    entries.sort(key=lambda e: _published(e) or _EPOCH, reverse=True)
+
+    out, seen = [], set()
+    for e in entries:
+        title = _clean_text(e.get("title", ""))
+        key = title.replace(" ", "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "title": title,
+            "excerpt": _clean_text(e.get("summary", "")),  # 피드 제공 요약(그대로)
+            "source": "Bloomberg",
+            "link": e.get("link", "").strip(),
+            "published": _published(e),
+            "region": "해외",
+            "lang": "en",
+        })
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def build_source_links(pool: list[dict], per_region: int) -> dict:
+    """맨 끝 Source 모음 — 지역별 최신 기사 (제목, 링크) 상위 N개."""
+    ordered = sorted(pool, key=lambda it: it["published"] or _EPOCH, reverse=True)
+    groups = {"국내": [], "해외": []}
+    seen = set()
+    for it in ordered:
+        region = it["region"]
+        link = it.get("link")
+        if region not in groups or len(groups[region]) >= per_region or not link:
+            continue
+        key = it["title"].replace(" ", "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        groups[region].append((it["title"], link))
+        if all(len(v) >= per_region for v in groups.values()):
+            break
+    return groups
 
 
 def build_headlines(pool: list[dict], per_region: int, maxlen: int) -> dict:
