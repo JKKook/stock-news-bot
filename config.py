@@ -135,3 +135,39 @@ ISSUE_EXCLUDE = [
     "마감시황", "마감", "종가", "장중", "시황", "목표주가", "투자의견",
     "신고가", "급등", "급락", "강세 마감", "약세 마감",
 ]
+
+
+# ════════════════════════════════════════════════════════════════
+#  6) 속보·급변 알림 (별도 워크플로 alerts.yml — 10분 주기)
+# ════════════════════════════════════════════════════════════════
+# 지수 급변 알림 대상 (지수 시세 대시보드와 별개로, 주가지수만)
+ALERT_INDICES = [
+    ("코스피",   "^KS11", "🇰🇷"),
+    ("코스닥",   "^KQ11", "🇰🇷"),
+    ("나스닥",   "^IXIC", "🇺🇸"),
+    ("S&P500",  "^GSPC", "🇺🇸"),
+    ("다우",     "^DJI",  "🇺🇸"),
+]
+# 전일 종가 대비 |변동%| 이 단계들을 넘을 때마다 단계별 1회 알림
+ALERT_INDEX_BANDS = [5, 8, 15, 20]   # 5%↑ 급변 / 8·15·20%는 서킷브레이커 수준
+ALERT_FNG_DELTA = 15                 # 공포탐욕지수가 직전 알림 대비 이만큼 변하면 알림
+ALERT_LOOKBACK_MIN = 90              # 이 시간 이내 발행된 기사만 속보로 인정
+ALERT_MAX_PER_RUN = 6                # 한 번 실행에서 보낼 최대 속보 수(과알림 방지)
+
+# 속보 검색 — (검색어, 언어, 지역)
+ALERT_NEWS_QUERIES = [
+    ("코스피 OR 코스닥 폭락 OR 급락 OR 사이드카 OR 서킷브레이커", "ko", "국내"),
+    ("증시 폭락 OR 급등 OR 패닉 OR 쇼크",                        "ko", "국내"),
+    ("stock market crash OR plunge OR trading halt OR circuit breaker", "en", "해외"),
+    ("Nasdaq OR S&P 500 plunge OR tumble OR selloff",            "en", "해외"),
+    ("전쟁 OR 공격 OR 미사일 OR 사상자 OR 긴급 금리",            "ko", "해외"),
+    ("war OR attack OR missile strike OR emergency rate",        "en", "해외"),
+]
+# 제목에 아래 단어가 있어야 '속보'로 인정 (과알림 방지)
+ALERT_KEYWORDS = [
+    "급락", "폭락", "급등", "폭등", "사이드카", "서킷브레이커", "패닉", "쇼크",
+    "사상", "비상", "전쟁", "공격", "미사일", "긴급", "속보", "붕괴", "강타",
+    "crash", "plunge", "plummet", "halt", "circuit breaker", "sidecar",
+    "surge", "soar", "panic", "war", "attack", "strike", "emergency",
+    "breaking", "tumble", "rout", "selloff", "collapse",
+]

@@ -1,0 +1,38 @@
+name: 속보·급변 알림
+
+on:
+  # ⚠️ 10분 자동 스케줄 — 비용 결정(공개 저장소 전환 등) 후 아래 두 줄 주석 해제
+  # schedule:
+  #   - cron: "*/10 * * * *"   # 10분마다 (GitHub 부하 시 지연/누락될 수 있음)
+  workflow_dispatch: {}   # 지금은 수동 실행만 (테스트용)
+
+# 이전 실행과 겹치지 않게 (상태 파일 경합 방지)
+concurrency:
+  group: alerts
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # 상태 파일(alert_state.json)을 실행 간 이어받기 — 롤링 키 패턴
+      - uses: actions/cache@v4
+        with:
+          path: alert_state.json
+          key: alert-state-${{ github.run_id }}
+          restore-keys: |
+            alert-state-
+
+      - run: pip install -r requirements.txt
+
+      - run: python alerts.py
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
