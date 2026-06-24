@@ -179,14 +179,14 @@ def _source_blocks(source_links: dict) -> list[list[str]]:
         if not items:
             continue
         def entry(t, l):
-            return [f"- {t}", f"<{l}>"]  # 제목 + 평문 링크(임베드 아님)
-        lead = [f"**[{label}]**"] + entry(*items[0])
+            return f"- [{t}]({l})"  # 제목에 하이퍼링크 (긴 URL 숨김)
+        lead = [f"**[{label}]**", entry(*items[0])]
         if not header_done:
             lead = ["## 🔗 Source (주요 기사 링크)"] + lead
             header_done = True
         blocks.append(lead)
         for t, l in items[1:]:
-            blocks.append(entry(t, l))
+            blocks.append([entry(t, l)])
     return blocks
 
 
