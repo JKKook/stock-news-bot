@@ -252,7 +252,8 @@ def send(messages: list[str]) -> None:
     for msg in messages:
         # 429(요청 과다) 발생 시 디스코드가 알려주는 시간만큼 기다렸다 재전송
         while True:
-            resp = requests.post(webhook, json={"content": msg}, timeout=20)
+            # flags=4 (SUPPRESS_EMBEDS): 링크 미리보기 카드 표시 안 함
+            resp = requests.post(webhook, json={"content": msg, "flags": 4}, timeout=20)
             if resp.status_code == 429:
                 wait = resp.json().get("retry_after", 1) + 0.5
                 print(f"⏳ rate limit — {wait:.1f}초 대기 후 재시도")
