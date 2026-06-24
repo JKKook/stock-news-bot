@@ -1,10 +1,9 @@
 name: 속보·급변 알림
 
 on:
-  # ⚠️ 10분 자동 스케줄 — 비용 결정(공개 저장소 전환 등) 후 아래 두 줄 주석 해제
-  # schedule:
-  #   - cron: "*/10 * * * *"   # 10분마다 (GitHub 부하 시 지연/누락될 수 있음)
-  workflow_dispatch: {}   # 지금은 수동 실행만 (테스트용)
+  schedule:
+    - cron: "*/10 * * * *"   # 10분마다 (GitHub 부하 시 지연/누락될 수 있음)
+  workflow_dispatch: {}
 
 # 이전 실행과 겹치지 않게 (상태 파일 경합 방지)
 concurrency:
