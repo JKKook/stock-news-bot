@@ -108,39 +108,17 @@ def _section(header: str, labeled_groups: list) -> list[list[str]]:
     return out  # 빈 섹션이면 빈 리스트
 
 
-def _spoiler_section(header: str, labeled_groups: list) -> list[list[str]]:
-    """헤더는 보이고 내용은 스포일러(||...||)로 가려 클릭 시 펼쳐지게.
-    스포일러는 한 메시지 안에 있어야 하므로 섹션 전체를 한 블록으로 묶는다.
-    """
-    body = []
-    for label, items in labeled_groups:
-        if not items:
-            continue
-        body.append(label)
-        for it in items:
-            src = f" ({it['source']})" if it.get("source") else ""
-            body.append(f"• {it['title']}{src}")
-            if it.get("excerpt"):
-                body.append(_cut(it["excerpt"], EXCERPT_MAX_LEN))
-        body.append("")
-    while body and body[-1] == "":
-        body.pop()
-    if not body:
-        return []
-    return [[header, "||"] + body + ["||"]]
-
-
 def _region_blocks(title, market, sectors_grouped, tickers) -> list[list[str]]:
     blocks = [[title]]
     if market:
         blocks += _section("## 📰 시장 뉴스",
                            [(f"**{g['label']}**", g["items"]) for g in market])
     if sectors_grouped:
-        blocks += _spoiler_section("## 🏭 섹터별 소식 ▸ (클릭하면 펼쳐짐)",
-                                   [(f"**{lbl}**", items) for lbl, items in sectors_grouped])
+        blocks += _section("## 🏭 섹터별 소식",
+                           [(f"**{lbl}**", items) for lbl, items in sectors_grouped])
     if tickers:
-        blocks += _spoiler_section("## ⭐ 관심 종목 ▸ (클릭하면 펼쳐짐)",
-                                   [(f"**{g['label']}**", g["items"]) for g in tickers])
+        blocks += _section("## ⭐ 관심 종목",
+                           [(f"**{g['label']}**", g["items"]) for g in tickers])
     return blocks
 
 
