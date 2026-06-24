@@ -16,7 +16,7 @@ import feedparser
 import config
 from collect import _clean_title, _published, _source, _EPOCH
 from market import get_indices, get_fear_greed
-from notify import _fg_zone, send
+from notify import _fg_zone, _fmt_chg, send
 from translate import translate_text
 
 STATE_FILE = "alert_state.json"
@@ -36,14 +36,13 @@ def save_state(s: dict) -> None:
 
 
 # ── 1) 지수 급변 ────────────────────────────────────────────────
-def check_indices(state: dict, today: str) -> list[str]:
+def check_indices(state: dict, today: str, indices: list[dict]) -> list[str]:
     bands = state.get("index_band", {}) if state.get("day") == today else {}
+    trigger = {n for n, _, _ in config.ALERT_INDICES}  # 급변 트리거는 주식 지수만
     alerts = []
-    try:
-        indices = get_indices(config.ALERT_INDICES)
-    except Exception:
-        indices = []
     for ix in indices:
+        if ix["name"] not in trigger:
+            continue
         chg = ix["chg"]
         crossed = max([b for b in config.ALERT_INDEX_BANDS if abs(chg) >= b], default=None)
         if crossed is None:
@@ -127,6 +126,16 @@ def check_fng(state: dict) -> list[str]:
     return []
 
 
+def _index_snapshot(indices: list[dict]) -> str:
+    """알림에 첨부할 '현재 주요 지수' 전체 현황."""
+    if not indices:
+        return ""
+    lines = ["📊 **현재 주요 지수**"]
+    for ix in indices:
+        lines.append(f"{ix['flag']} {ix['name']} {ix['price']:,.2f}  {_fmt_chg(ix['chg'])}")
+    return "\n".join(lines)
+
+
 def _pack(header: str, alerts: list[str]) -> list[str]:
     msgs, cur = [], header
     for a in alerts:
@@ -144,8 +153,13 @@ def main() -> None:
     kst = datetime.now(timezone.utc) + timedelta(hours=9)
     today = f"{kst:%Y-%m-%d}"
 
+    try:
+        indices = get_indices(config.INDICES)   # 전체 지수(금·은·비트코인 포함) 1회 조회
+    except Exception:
+        indices = []
+
     alerts = []
-    alerts += check_indices(state, today)
+    alerts += check_indices(state, today, indices)
     alerts += check_fng(state)
     alerts += check_news(state)
 
@@ -156,7 +170,11 @@ def main() -> None:
         return
 
     header = f"🚨 **속보 · 급변 알림** — {kst:%H:%M} (KST)"
-    send(_pack(header, alerts))
+    messages = _pack(header, alerts)
+    snapshot = _index_snapshot(indices)   # 알림마다 전체 지수 현황 첨부
+    if snapshot:
+        messages.append(snapshot)
+    send(messages)
 
 
 if __name__ == "__main__":
