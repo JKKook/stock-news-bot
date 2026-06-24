@@ -147,6 +147,8 @@ def build_source_links(pool: list[dict], per_region: int) -> dict:
         link = it.get("link")
         if region not in groups or len(groups[region]) >= per_region or not link:
             continue
+        if it.get("source") == "Bloomberg":   # 블룸버그는 Source에서 별도 그룹으로 처리
+            continue
         key = it["title"].replace(" ", "")
         if not key or key in seen:
             continue

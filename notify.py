@@ -10,7 +10,7 @@ import os
 import time
 import requests
 
-from config import EXCERPT_MAX_LEN
+from config import EXCERPT_MAX_LEN, SOURCE_BLOOMBERG
 
 DISCORD_LIMIT = 1900  # 디스코드 메시지 길이 제한(2000)보다 약간 작게
 
@@ -131,6 +131,7 @@ def _emit(blocks: list[list[str]]) -> list[str]:
     for block in blocks:
         text = "\n".join(block)
         force_break = bool(block) and block[0].startswith("# ")
+        is_header = bool(block) and block[0].lstrip().startswith("#")
 
         if force_break and current:
             messages.append(current.rstrip())
@@ -144,10 +145,13 @@ def _emit(blocks: list[list[str]]) -> list[str]:
                 messages.append(text[i:i + DISCORD_LIMIT])
             continue
 
-        if current and len(current) + len(text) + 1 > DISCORD_LIMIT:
+        # 섹션(##/#) 앞에 빈 줄 2개를 둬서 영역 구분을 확실히
+        sep = "\n\n" if (current and is_header) else ""
+        if current and len(current) + len(sep) + len(text) + 1 > DISCORD_LIMIT:
             messages.append(current.rstrip())
             current = ""
-        current += text + "\n"
+            sep = ""
+        current += sep + text + "\n"
 
     if current.strip():
         messages.append(current.rstrip())
@@ -161,25 +165,34 @@ def _bloomberg_blocks(items: list[dict]) -> list[list[str]]:
         b = [f"• {it['title']} (Bloomberg)"]
         if it.get("excerpt"):
             b.append(_cut(it["excerpt"], EXCERPT_MAX_LEN))
-        if it.get("link"):
-            b.append(f"<{it['link']}>")
+        # 링크는 본문에 달지 않고 Source 영역에서만 제공
         if i == 0:
             b = ["## 🏦 블룸버그 주요 기사"] + b  # 헤더를 첫 기사와 묶어 고아 방지
         out.append(b)
     return out
 
 
-def _source_blocks(source_links: dict) -> list[list[str]]:
-    """맨 끝 Source 모음 — 한국/미국, 한 줄짜리 마스크 링크."""
-    if not (source_links.get("국내") or source_links.get("해외")):
+def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[list[str]]:
+    """맨 끝 Source 모음 — 한국/미국/블룸버그, 제목 하이퍼링크."""
+    groups = [
+        ("🇰🇷 한국", source_links.get("국내") or []),
+        ("🇺🇸 미국", source_links.get("해외") or []),
+    ]
+    # 블룸버그 주요 기사 몇 개를 하이퍼링크로 (본문 섹션엔 링크 없음)
+    bb = [(it["title"], it["link"]) for it in (bloomberg or []) if it.get("link")]
+    if bb:
+        groups.append(("🏦 블룸버그", bb))
+
+    if not any(items for _, items in groups):
         return []
+
+    def entry(t, l):
+        return f"- [{t}]({l})"  # 제목에 하이퍼링크 (긴 URL 숨김)
+
     blocks, header_done = [], False
-    for region, label in [("국내", "🇰🇷 한국"), ("해외", "🇺🇸 미국")]:
-        items = source_links.get(region) or []
+    for label, items in groups:
         if not items:
             continue
-        def entry(t, l):
-            return f"- [{t}]({l})"  # 제목에 하이퍼링크 (긴 URL 숨김)
         lead = [f"**[{label}]**", entry(*items[0])]
         if not header_done:
             lead = ["## 🔗 Source (주요 기사 링크)"] + lead
@@ -235,8 +248,8 @@ def build_messages(header, today, indices, fear_greed, yahoo, headlines, market,
             blocks += _region_blocks(title, m, sectors_grouped, t)
             blocks += _bloomberg_blocks(bb)
 
-    # 맨 끝 Source 링크 모음
-    blocks += _source_blocks(source_links)
+    # 맨 끝 Source 링크 모음 (블룸버그 주요 기사도 하이퍼링크로 포함)
+    blocks += _source_blocks(source_links, bloomberg[:SOURCE_BLOOMBERG])
 
     blocks.append([SEPARATOR])  # 맨 뒤 구분선
     return _emit(blocks)

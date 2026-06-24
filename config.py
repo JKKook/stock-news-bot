@@ -17,8 +17,9 @@ MAX_SECTOR = 2           # 3) 섹터·지역당 기사 수
 MAX_TICKER = 2           # 4) 종목당 (이슈) 기사 수
 TICKER_CANDIDATES = 12   # 종목당 이슈 선별 전 후보 기사 수
 EXCERPT_MAX_LEN = 300    # 기사 발췌문 최대 글자 수 (300자 미만)
-MAX_BLOOMBERG = 5        # 블룸버그 공식 RSS 표시 건수
+MAX_BLOOMBERG = 5        # 블룸버그 공식 RSS 표시 건수(해외 섹션)
 SOURCE_PER_REGION = 6    # 맨 끝 Source 링크 모음 — 한국/미국 각각 건수
+SOURCE_BLOOMBERG = 3     # Source에 하이퍼링크로 넣을 블룸버그 주요 기사 수
 
 # 블룸버그 공식 RSS (퍼블리셔 제공 요약 포함 — 합법적 신디케이션 피드)
 BLOOMBERG_FEEDS = [
