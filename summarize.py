@@ -16,6 +16,8 @@
 
 import os
 import json
+import hashlib
+from datetime import datetime, timezone, timedelta
 
 import requests
 
@@ -23,6 +25,7 @@ import config
 
 _KEY = os.environ.get("GEMINI_API_KEY")
 _URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+_CACHE_FILE = "summary_cache.json"
 
 _SYSTEM = (
     "너는 한국 개인투자자를 위한 시장 브리핑 요약가다. "
@@ -77,6 +80,56 @@ def _guard(summary: dict | None) -> dict | None:
     return cleaned
 
 
+def _cache_get(key: str):
+    """헤드라인 해시로 최근(SUMMARY_CACHE_TTL_H시간 내) 요약 재사용 — 중복 호출/429 방지."""
+    if not config.SUMMARY_CACHE_TTL_H:
+        return None
+    try:
+        with open(_CACHE_FILE, encoding="utf-8") as f:
+            e = json.load(f).get(key)
+        if e and (datetime.now(timezone.utc) - datetime.fromisoformat(e["ts"])
+                  < timedelta(hours=config.SUMMARY_CACHE_TTL_H)):
+            return e["data"]
+    except Exception:
+        pass
+    return None
+
+
+def _cache_put(key: str, data: dict) -> None:
+    """요약 캐시 저장 + 만료 항목 정리(파일 비대화 방지). 실패해도 무시(봇 안 멈춤)."""
+    if not config.SUMMARY_CACHE_TTL_H:
+        return
+    try:
+        now = datetime.now(timezone.utc)
+        cache = {}
+        try:
+            with open(_CACHE_FILE, encoding="utf-8") as f:
+                cache = json.load(f)
+        except Exception:
+            cache = {}
+        cache = {k: v for k, v in cache.items()
+                 if (now - datetime.fromisoformat(v["ts"])
+                     < timedelta(hours=config.SUMMARY_CACHE_TTL_H))}
+        cache[key] = {"ts": now.isoformat(), "data": data}
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _call_model(model: str, body: dict) -> dict | None:
+    """단일 Gemini 모델 호출 → 요약 dict(또는 빈 값이면 None). 실패 시 예외 발생(폴백이 잡음)."""
+    r = requests.post(_URL.format(model=model),
+                      params={"key": _KEY}, json=body, timeout=20)
+    r.raise_for_status()
+    parts = r.json()["candidates"][0]["content"]["parts"]
+    text = "".join(p.get("text", "") for p in parts)
+    data = json.loads(text)
+    out = {k: (data.get(k) or "").strip()
+           for k in ("what_changed", "why_matters", "watch", "affected")}
+    return out if any(out.values()) else None
+
+
 def _watchlist_context() -> str:
     """관심 섹터·종목 목록을 프롬프트용 텍스트로 (P1-6 사건→관심대상 매핑용)."""
     sectors = ", ".join(config.SECTORS.keys())
@@ -113,15 +166,25 @@ def summarize(headlines: dict) -> dict | None:
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }
-    try:
-        r = requests.post(_URL.format(model=config.SUMMARY_MODEL),
-                          params={"key": _KEY}, json=body, timeout=20)
-        r.raise_for_status()
-        parts = r.json()["candidates"][0]["content"]["parts"]
-        text = "".join(p.get("text", "") for p in parts)
-        data = json.loads(text)
-        out = {k: (data.get(k) or "").strip() for k in ("what_changed", "why_matters", "watch", "affected")}
-        return _guard(out) if any(out.values()) else None   # D-5 조언 가드
-    except Exception as e:
-        print(f"⚠️  AI 요약 실패({e}) — 요약 섹션 생략")
-        return None
+
+    # (P4-1) 캐시 히트 시 API 호출 없이 반환(동일 헤드라인 중복실행·테스트 보호)
+    cache_key = hashlib.md5(prompt.encode("utf-8")).hexdigest()
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return _guard(cached)
+
+    # (P4-1) 모델 폴백 체인 — 1차 실패/429면 다음 모델로. 전부 실패해야 생략.
+    last_err = None
+    for model in [config.SUMMARY_MODEL, *config.SUMMARY_FALLBACK_MODELS]:
+        try:
+            out = _call_model(model, body)
+            if out:
+                _cache_put(cache_key, out)
+                if model != config.SUMMARY_MODEL:
+                    print(f"ℹ️  요약 폴백 모델 사용: {model}")
+                return _guard(out)   # D-5 조언 가드
+        except Exception as e:
+            last_err = e
+            print(f"⚠️  요약 모델 {model} 실패({str(e)[:90]}) — 다음 폴백 시도")
+    print(f"⚠️  모든 요약 모델 실패 — 요약 섹션 생략 (마지막 오류: {last_err})")
+    return None
