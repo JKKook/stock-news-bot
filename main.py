@@ -4,13 +4,17 @@
 로컬 테스트:  .venv/bin/python main.py
 """
 
+import os
 from datetime import datetime, timezone, timedelta
 
 import config
-from collect import collect, build_headlines, yahoo_headline, bloomberg_items, build_source_links
-from market import get_indices, get_fear_greed
+from collect import (collect, build_headlines, yahoo_headline, bloomberg_items,
+                     build_source_links, dedupe_all)
+from market import get_indices, get_fear_greed, get_quotes
+from catalysts import get_catalysts
 from issues import filter_issues
 from translate import translate_items, translate_text
+from summarize import summarize
 from notify import build_messages, send
 
 
@@ -28,6 +32,13 @@ def main() -> None:
     today = f"{kst:%Y-%m-%d}"
     header = f"📰 **주식 이슈 브리핑** — {kst:%Y-%m-%d %H:%M} (KST)"
 
+    # 주말(토/일)·공휴일(KST)엔 정규 브리핑 생략 — 기사는 속보(alerts.py)만 제공.
+    #   FORCE_BRIEFING=1 이면 강제 발송(수동 실행·테스트용).
+    if os.environ.get("FORCE_BRIEFING") != "1" and (
+            kst.weekday() >= 5 or f"{kst:%m-%d}" in config.KR_HOLIDAYS):
+        print("주말/공휴일(KST) — 정규 브리핑 생략. 속보는 alerts.py가 담당합니다.")
+        return
+
     print("시세·뉴스 수집 중...")
     indices = get_indices(config.INDICES)
     fear_greed = get_fear_greed()
@@ -38,6 +49,12 @@ def main() -> None:
 
     # 5) 관심 종목은 '특정 이슈' 기사만 선별 (이슈 없는 종목은 표시 안 함)
     tickers = filter_issues(tickers, config.MAX_TICKER)
+
+    # 5-1) 전 관심종목 시세 조회 — 개별 줄(뉴스 있는 종목) + 요약표(전 종목)에 사용
+    quotes = get_quotes(config.TICKER_SYMBOLS)
+
+    # 5-2) 다가오는 촉매(경제지표 + 실적) 조회 (P0-4: FMP, 키 없으면 빈 결과)
+    catalysts = get_catalysts()
 
     # 블룸버그 공식 RSS (해외 섹션용)
     bloomberg = bloomberg_items(config.BLOOMBERG_FEEDS, config.MAX_BLOOMBERG)
@@ -53,12 +70,19 @@ def main() -> None:
         print("표시할 뉴스가 없어 발송을 건너뜁니다.")
         return
 
+    # 번역된 제목 기준으로 브리핑 전체 중복 기사 제거(같은 사건 한 번만)
+    dedupe_all(market, sectors, tickers, bloomberg)
+
     # 헤드라인 + Source 링크: (번역된) 기사를 지역별 최신순으로
     headlines = build_headlines(pool, config.HEADLINE_PER_REGION, config.HEADLINE_MAX_LEN)
     source_links = build_source_links(pool, config.SOURCE_PER_REGION)
 
+    # 🧭 so-what 요약 — 품질 필터된 헤드라인만 Claude에 넘겨 3줄 종합 (키 없으면 None)
+    print("AI 요약 중...")
+    summary = summarize(headlines)
+
     messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
-                              market, sectors, tickers, bloomberg, source_links)
+                              market, sectors, tickers, bloomberg, source_links, quotes, catalysts, summary)
     send(messages)
 
 
