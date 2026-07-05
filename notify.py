@@ -13,8 +13,8 @@ import unicodedata
 import requests
 
 from config import (EXCERPT_MAX_LEN, SOURCE_BLOOMBERG, DISCLAIMER,
-                    TICKER_MOVE_FLAG, SHORT_INTEREST_FLAG,
-                    BLOOMBERG_EXCERPT_LEN, TICKERS, TICKER_SYMBOLS)
+                    TICKER_MOVE_FLAG, SHORT_INTEREST_FLAG, REVERSAL_MOVE_FLAG,
+                    VOLUME_FLAG, BLOOMBERG_EXCERPT_LEN, TICKERS, TICKER_SYMBOLS)
 
 DISCORD_LIMIT = 1900  # 디스코드 메시지 길이 제한(2000)보다 약간 작게
 
@@ -100,7 +100,7 @@ def _per_num(d: dict) -> str:
     t, f = d.get("per_trailing"), d.get("per_forward")
     v = t if (t and t > 0) else (f if (f and f > 0) else None)
     if v:
-        return f"{v:.0f}"
+        return "999+" if v > 999 else f"{v:.0f}"   # 극단 PER(고성장·저이익)은 캡 — 숫자 오인 방지
     if (t is not None and t < 0) or (f is not None and f < 0):
         return "적자"
     return "-"
@@ -259,7 +259,7 @@ def _catalyst_blocks(catalysts: dict) -> list[list[str]]:
     if not econ and not earn:
         return []
 
-    body = ["### 📅 예정 촉매 · 중기"]  # (P2-8) 호라이즌 라벨
+    body = ["### 📅 예정 촉매"]  # 호라이즌은 상위 🟡 중기 divider가 표시
     if econ:
         body.append("**경제지표**")
         for e in econ:
@@ -359,7 +359,7 @@ def _theme_news_blocks(sectors: list[dict]) -> list[list[str]]:
     if not order:
         return []
     labeled = [(f"**{lbl}**", by_theme[lbl]) for lbl in order]
-    return _grouped_blocks("### 🏭 테마별 소식 · 장기 테마", labeled, show_region=True)
+    return _grouped_blocks("### 🏭 테마별 소식", labeled, show_region=True)
 
 
 def _watchlist_news_blocks(tickers: list[dict], quotes=None) -> list[list[str]]:
@@ -395,6 +395,9 @@ def _watchlist_highlights(quotes: dict) -> list[list[str]]:
         bits = [_fmt_chg(q["chg"])]
         if bb is not None:
             bits.append(_bb_zone(bb))
+        vm = q.get("vol_mult")
+        if vm is not None and vm >= VOLUME_FLAG:   # (P3-1) 거래량 동반 시 표시
+            bits.append(f"거래량 {vm:.1f}×")
         sp = q.get("short_pct")
         if sp is not None and sp >= SHORT_INTEREST_FLAG:
             bits.append(f"공매도 {sp:.0f}%")
@@ -403,6 +406,62 @@ def _watchlist_highlights(quotes: dict) -> list[list[str]]:
         return []
     cand.sort(reverse=True)   # 변동폭 큰 순 상위 4개만
     return [["📐 **주목** — " + "  /  ".join(n for _, n in cand[:4])]]
+
+
+def _kr_flow_blocks(quotes: dict) -> list[list[str]]:
+    """(P2-7) 국내 관심종목 외국인·기관 순매매 — 주식수×종가로 억원 근사, 큰 순.
+    CNN 공포탐욕(미국 편향)을 보완하는 국내 수급 관점. 정보성(매매신호 아님)."""
+    if not quotes:
+        return []
+    rows = []
+    for label, q in quotes.items():
+        f, i, p = q.get("foreign_net"), q.get("inst_net"), q.get("price")
+        if f is None or i is None or not p:
+            continue
+        fv, iv = f * p / 1e8, i * p / 1e8          # 순매매금액 근사(억원)
+        if abs(fv) < 30 and abs(iv) < 30:          # 30억 미만은 노이즈로 생략
+            continue
+        rows.append((abs(fv) + abs(iv), label, fv, iv))
+    if not rows:
+        return []
+    rows.sort(reverse=True)
+
+    def eok(v):   # 억 단위 값 → 1조 이상은 '조'로
+        return f"{v / 10000:+.1f}조" if abs(v) >= 10000 else f"{v:+,.0f}억"
+
+    lines = ["### 🏦 국내 수급 · 외국인·기관 순매매"]
+    for _, label, fv, iv in rows[:8]:
+        lines.append(f"- **{label}** 외국인 {eok(fv)} · 기관 {eok(iv)}")
+    lines.append("_전 거래일 · 주식수×종가 환산(근사) · 순매수(+)/순매도(−) · 매매신호 아님._")
+    return [lines]
+
+
+def _reversal_warnings(quotes: dict) -> list[list[str]]:
+    """(P3-2) 급변(±REVERSAL_MOVE_FLAG%↑) + 볼린저 밴드 같은 방향 과확장(상단권/하단권)이
+    겹친 종목에 '이미 큰 폭 반영·추격 주의' 맥락 라벨. 정보성 행동재무 경고 — 매매신호 아님.
+    급등/급락 소식에 추격 진입하려는 충동을 '이미 가격에 반영됐을 수 있다'로 눌러준다."""
+    if not quotes:
+        return []
+    hits = []
+    for label, q in quotes.items():
+        chg, bb = q.get("chg"), q.get("bb_pct")
+        if chg is None or bb is None or abs(chg) < REVERSAL_MOVE_FLAG:
+            continue
+        stretched = (chg > 0 and bb >= 80) or (chg < 0 and bb <= 20)  # 급변과 같은 방향 과확장
+        if not stretched:
+            continue
+        desc = f"{label} {chg:+.1f}%·{_bb_zone(bb)}"
+        vm = q.get("vol_mult")
+        if vm is not None and vm >= VOLUME_FLAG:   # (P3-1) 거래량 동반이면 선반영 강도↑
+            desc += f"·거래량 {vm:.1f}×"
+        hits.append((abs(chg), desc))
+    if not hits:
+        return []
+    hits.sort(reverse=True)
+    return [[
+        "⚠️ **추격 주의** · 이미 큰 폭 반영 — " + "  /  ".join(h for _, h in hits),
+        "_급등·급락이 가격에 선반영됐을 수 있어 되돌림 위험 — 추격 진입은 신중히(매매 신호 아님)._",
+    ]]
 
 
 def _region_blocks(title, market, sectors_grouped, tickers, quotes=None) -> list[list[str]]:
@@ -441,7 +500,8 @@ def _emit(blocks: list[list[str]]) -> list[str]:
     messages, current = [], ""
     for block in blocks:
         text = "\n".join(block)
-        force_break = bool(block) and block[0].startswith("# ")
+        # '# ' 지역 헤더 또는 '**━━' 호라이즌 divider는 항상 새 메시지로 시작
+        force_break = bool(block) and (block[0].startswith("# ") or block[0].startswith("**━━"))
         is_header = bool(block) and block[0].lstrip().startswith("#")
 
         if force_break and current:
@@ -527,44 +587,45 @@ def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[lis
     return blocks
 
 
+def _headline_blocks(headlines, today) -> list[list[str]]:
+    """🔥 오늘의 헤드라인 블록(국내/해외). 없으면 []."""
+    if not headlines or not (headlines.get("국내") or headlines.get("해외")):
+        return []
+    hb = [f"### 🔥 오늘의 헤드라인 ({today})"]
+    for region, flag in [("국내", "🇰🇷"), ("해외", "🇺🇸")]:
+        hs = headlines.get(region) or []
+        if hs:
+            if len(hb) > 1:
+                hb.append("")   # 지역 그룹 사이 여백(margin) 통일
+            hb.append(f"**{flag} {region}**")
+            hb += [f"{i}. {t}" for i, t in enumerate(hs, 1)]
+    return [hb]
+
+
 def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links, quotes=None, catalysts=None, summary=None) -> list[str]:
+    # (P2-8 풀버전) 섹션을 투자 호라이즌 3개 층으로 묶는다 — 혼합 사용자가 '내 층'만 스캔.
+    #   divider는 폰트를 키우지 않는 작은 볼드(**━━ … ━━**), _emit이 각 층을 새 메시지로 시작.
+    short = (_dashboard_blocks(indices, fear_greed)      # 지금 시장 현황
+             + _summary_blocks(summary)                  # 오늘의 핵심(so-what)
+             + _watchlist_table_blocks(quotes)           # 관심종목 수치
+             + _watchlist_highlights(quotes)             # 주목(급변·밴드 극단)
+             + _reversal_warnings(quotes)                # 추격 주의(선반영)
+             + _kr_flow_blocks(quotes)                   # 국내 수급
+             + _headline_blocks(headlines, today))       # 오늘의 헤드라인
+    mid = _catalyst_blocks(catalysts)                    # 예정 촉매(수일~수주)
+    long = (_theme_news_blocks(sectors)                  # 테마별 소식(장기 테마)
+            + _watchlist_news_blocks(tickers, quotes))   # 관심종목 뉴스
+
     blocks = [[SEPARATOR, header]]  # 맨 앞 구분선
+    if short:
+        blocks += [["**━━ 🔴 지금 · 단기 ━━**"]] + short
+    if mid:
+        blocks += [["**━━ 🟡 중기 · 수일~수주 ━━**"]] + mid
+    if long:
+        blocks += [["**━━ 🟢 장기 · 테마·펀더멘털 ━━**"]] + long
 
-    # 📊 맨 위 대시보드 — 주요 지수 시세 + 공포탐욕지수
-    blocks += _dashboard_blocks(indices, fear_greed)
-
-    # 🧭 오늘의 핵심 — AI so-what 요약 (무엇이 바뀌었나/왜 중요한가/무엇을 지켜볼까)
-    blocks += _summary_blocks(summary)
-
-    # 📅 예정 촉매 — 경제지표 + 관심종목 실적 (다가오는 이벤트를 먼저)
-    blocks += _catalyst_blocks(catalysts)
-
-    # ⭐ 관심종목 지표 요약표 — 전 종목 한눈에(시세·등락·52주·BB·PER)
-    blocks += _watchlist_table_blocks(quotes)
-    # 표 아래 '주목' — 밴드 극단·급변 종목의 핵심 판단(표=수치+판단)
-    blocks += _watchlist_highlights(quotes)
-
-    # 🔥 오늘의 헤드라인 — 국내/해외 (유지)
-    if headlines and (headlines.get("국내") or headlines.get("해외")):
-        hb = [f"### 🔥 오늘의 헤드라인 ({today})"]
-        for region, flag in [("국내", "🇰🇷"), ("해외", "🇺🇸")]:
-            hs = headlines.get(region) or []
-            if hs:
-                if len(hb) > 1:
-                    hb.append("")   # 지역 그룹 사이 여백(margin) 통일
-                hb.append(f"**{flag} {region}**")
-                hb += [f"{i}. {t}" for i, t in enumerate(hs, 1)]
-        blocks.append(hb)
-
-    # 🏭 테마별 소식 — 국내+해외 통합(테마축). 📰 시장뉴스·Yahoo 헤드라인은 폐지.
-    blocks += _theme_news_blocks(sectors)
-
-    # ⭐ 관심종목 뉴스 — 뉴스 있는 종목만, 뉴스 불릿만(수치·판단은 위 표에)
-    blocks += _watchlist_news_blocks(tickers, quotes)
-
-    # 맨 끝 Source 링크 모음 (블룸버그는 섹션·Source 모두 제외)
+    # 부록(호라이즌 밖) — Source 링크 · 용어 · 면책
     blocks += _source_blocks(source_links)
-
     blocks += _glossary_blocks()  # 용어 주석
     blocks.append([DISCLAIMER])  # (P0-3) 면책 — 매수/매도 신호 아님
     blocks.append([SEPARATOR])   # 맨 뒤 구분선
