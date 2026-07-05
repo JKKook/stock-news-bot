@@ -82,7 +82,12 @@ def earnings_events() -> list[dict]:
             ed = cal.get("Earnings Date")
             if not ed:
                 continue
-            dates = [d for d in (ed if isinstance(ed, list) else [ed]) if today <= d <= horizon]
+            # datetime→date 정규화(타입 불일치 비교 에러로 전 종목 누락되는 것 방지) + stale(과거)·원거리 제외
+            dates = []
+            for d in (ed if isinstance(ed, list) else [ed]):
+                d = d.date() if isinstance(d, datetime) else d
+                if today <= d <= horizon:
+                    dates.append(d)
             if dates:
                 out.append({"date": min(dates).isoformat(), "name": name})
         except Exception:
