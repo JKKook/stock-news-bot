@@ -1,5 +1,7 @@
 """실시간 시세 데이터 — 주요 지수(야후) + CNN 공포탐욕지수 (무료, API 키 불필요)."""
 
+import re
+import html
 import statistics
 
 import requests
@@ -39,7 +41,43 @@ def get_indices(symbols) -> list[dict]:
     return out
 
 
-def get_quotes(symbols: dict) -> dict:
+_NAVER_UA = {"User-Agent": _UA["User-Agent"], "Referer": "https://finance.naver.com/"}
+
+
+def _to_int(s: str):
+    try:
+        return int(s.replace(",", "").replace("+", ""))
+    except Exception:
+        return None
+
+
+def _kr_flow(sym: str) -> dict:
+    """(P2-7 재시도) 네이버 금융 개별종목 최근 거래일 외국인·기관 순매매(주식수).
+    표 열: 날짜·종가·전일비·등락률·거래량·기관순매매·외국인순매매·외국인보유주·보유율.
+    무료·무인증. .KS/.KQ 국내주만. 실패·형식변경 시 빈 dict(그레이스풀).
+    ⚠️ 스크래핑이라 레이아웃 변경에 취약 — 값 없으면 조용히 생략."""
+    m = re.match(r"(\d{6})\.(KS|KQ)$", sym)
+    if not m:
+        return {}
+    try:
+        r = requests.get(f"https://finance.naver.com/item/frgn.naver?code={m.group(1)}",
+                         headers=_NAVER_UA, timeout=8)
+        r.encoding = "euc-kr"
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S):
+            tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+            cells = [html.unescape(re.sub("<[^>]+>", "", x)).strip().replace("\xa0", "")
+                     for x in tds]
+            if len(cells) >= 7 and re.match(r"\d{4}\.\d{2}\.\d{2}$", cells[0]):
+                inst, foreign = _to_int(cells[5]), _to_int(cells[6])
+                if inst is None or foreign is None:
+                    return {}
+                return {"inst_net": inst, "foreign_net": foreign, "flow_date": cells[0]}
+    except Exception:
+        return {}
+    return {}
+
+
+def get_quotes(symbols: dict, with_flow: bool = False) -> dict:
     """{종목명: 야후심볼} → {종목명: {price, chg(%), w52pos(%), currency}}.
     P0-1: 관심종목 뉴스에 price action(현재가·등락·52주 위치)을 붙이기 위함.
     심볼이 None(비상장)이거나 조회 실패한 종목은 결과에서 생략."""
@@ -61,6 +99,10 @@ def get_quotes(symbols: dict) -> dict:
                 closes = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]
             except Exception:
                 closes = []
+            try:
+                volumes = res["indicators"]["quote"][0]["volume"]
+            except Exception:
+                volumes = []
             # 라이브 시세가 일별 종가와 30%+ 어긋나면(야후 글리치) 최근 종가 사용
             if closes and closes[-1] and abs(price - closes[-1]) / closes[-1] > 0.30:
                 price = closes[-1]
@@ -78,7 +120,9 @@ def get_quotes(symbols: dict) -> dict:
                 "w52pos": w52pos,
                 "currency": meta.get("currency", ""),
                 "bb_pct": _bollinger_pct(closes, price),
+                "vol_mult": _volume_mult(volumes),   # (P3-1) 평소 대비 거래량 배수
                 **_yf_extra(sym),   # PER(trailing/forward) + 공매도(비율·증감)
+                **(_kr_flow(sym) if with_flow else {}),   # (P2-7) 국내 외국인·기관 순매매
             }
         except Exception:
             continue
@@ -105,6 +149,20 @@ def _yf_extra(sym: str) -> dict:
     except Exception:
         pass
     return out
+
+
+def _volume_mult(volumes: list):
+    """(P3-1) 당일 거래량 ÷ 직전 세션 평균 = '평소 대비' 배수.
+    같은 시세 조회의 일별 거래량을 재사용(추가 HTTP 없음). 표본 부족·0이면 None.
+    가격 급변이 '거래량 동반(=참여 폭발)'인지 판단해 이례성/선반영 신호를 보강."""
+    vols = [v for v in (volumes or []) if v]
+    if len(vols) < 5:
+        return None
+    today, hist = vols[-1], vols[:-1]
+    avg = statistics.fmean(hist)
+    if avg <= 0:
+        return None
+    return today / avg
 
 
 def _bollinger_pct(closes: list, price: float):
