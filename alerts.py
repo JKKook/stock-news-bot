@@ -16,7 +16,7 @@ import feedparser
 import config
 from collect import _clean_title, _published, _source, _EPOCH
 from events import fingerprint, headline
-from market import get_indices, get_fear_greed
+from market import get_indices, get_fear_greed, get_quotes
 from notify import _fg_zone, send
 from translate import translate_text
 
@@ -44,8 +44,23 @@ def save_state(s: dict) -> None:
         json.dump(s, f, ensure_ascii=False)
 
 
+def _index_session(name: str, kst: datetime) -> str:
+    """지수 급변이 어느 세션에서 났는지 KST 시간 기준으로 판정(현물은 정규장에만 움직임).
+    · 국내(코스피·코스닥): 평일 09:00~15:30 = '정규장', 그 외 = '장마감(종가)'
+    · 미국 현물(나스닥·S&P·다우): 미 정규장(KST 약 22:30~06:00) = '정규장', 그 외 = '장마감(종가)'
+    · 선물(나스닥선물 등, 거의 24h): 미 정규장 시간 = '정규장', 그 외 = '야간선물'
+    한국 투자자가 '지금 이게 야선인지 정규장인지'를 즉시 알 수 있게 한다."""
+    wd, hm = kst.weekday(), kst.hour * 60 + kst.minute
+    us_regular = (hm >= 22 * 60 + 30) or (hm <= 6 * 60)   # KST로 환산한 미 정규장(서머타임 근사)
+    if "선물" in name:
+        return "정규장" if us_regular else "야간선물"
+    if name in ("코스피", "코스닥"):
+        return "정규장" if (wd < 5 and 9 * 60 <= hm <= 15 * 60 + 30) else "장마감(종가)"
+    return "정규장" if us_regular else "장마감(종가)"   # 미국 현물 지수
+
+
 # ── 1) 지수 급변 ────────────────────────────────────────────────
-def check_indices(state: dict, today: str, indices: list[dict]) -> list[str]:
+def check_indices(state: dict, today: str, indices: list[dict], kst: datetime) -> list[str]:
     bands = state.get("index_band", {}) if state.get("day") == today else {}
     trigger = {n for n, _, _ in config.ALERT_INDICES}  # 급변 트리거는 주식 지수만
     alerts = []
@@ -60,8 +75,9 @@ def check_indices(state: dict, today: str, indices: list[dict]) -> list[str]:
             bands[ix["name"]] = crossed
             direction = "급락 🔻" if chg < 0 else "급등 🔺"
             level = "⚠️ 서킷브레이커/사이드카 수준" if crossed >= 8 else "큰 변동"
+            session = _index_session(ix["name"], kst)   # 정규장 / 야간선물 / 장마감
             alerts.append(
-                f"{ix['flag']} **{ix['name']} {direction} {chg:+.2f}%** ({crossed}%↑ 돌파, {level})\n"
+                f"{ix['flag']} **{ix['name']} {direction} {chg:+.2f}%** · ⏰{session} ({crossed}%↑ 돌파, {level})\n"
                 f"현재 {ix['price']:,.2f} (전일 종가 대비)"
             )
     state["index_band"] = bands
@@ -84,6 +100,38 @@ def _severity(title_low: str) -> int:
     if any(w in title_low for w in config.ALERT_SEVERITY_MID):
         return 2
     return 1
+
+
+def _confirm_move(title: str) -> str:
+    """(P3 확장) 속보 제목이 관심종목을 지목하면 실제 가격·거래량 반응으로 확증/주의.
+    · |등락|≥ALERT_CONFIRM_MOVE → '📈 실제 {종목} {등락}·거래량 N×' (진짜 이례성, 선반영 강도)
+    · 반응 미미 → '📉 {종목} 가격 반응 미미'(이미 반영/영향 제한 가능)
+    관심종목 미언급이면 ''(지수·지정학 속보는 종목 확증 대상 아님). 매매신호 아님.
+    실제 가격 반응으로 '제목만 자극적인 가짜 속보'를 사용자가 가려낼 근거를 준다."""
+    matched = {}
+    for label, sym in config.TICKER_SYMBOLS.items():
+        if not sym:
+            continue
+        if label in title or (len(sym) >= 4 and sym in title):   # 한글명 또는 4자+ 심볼
+            matched[label] = sym
+    if not matched:
+        return ""
+    try:
+        quotes = get_quotes(matched)
+    except Exception:
+        return ""
+    parts = []
+    for label, q in quotes.items():
+        chg = q.get("chg")
+        if chg is None:
+            continue
+        vm = q.get("vol_mult")
+        vtxt = f"·거래량 {vm:.1f}×" if (vm and vm >= config.VOLUME_FLAG) else ""
+        if abs(chg) >= config.ALERT_CONFIRM_MOVE:
+            parts.append(f"📈 실제 {label} {chg:+.1f}%{vtxt} 동반")
+        else:
+            parts.append(f"📉 {label} 가격 반응 미미({chg:+.1f}%)")
+    return ("\n" + " · ".join(parts)) if parts else ""
 
 
 def check_news(state: dict) -> list[str]:
@@ -147,6 +195,7 @@ def check_news(state: dict) -> list[str]:
         shown = c["title"] if c["lang"] == "ko" else translate_text(c["title"])
         flag = "🇰🇷" if c["region"] == "국내" else "🇺🇸"
         block = f"{headline(c['title'])} {flag}\n{shown}" + (f" ({c['src']})" if c["src"] else "")
+        block += _confirm_move(c["title"])   # (P3) 관심종목 지목 시 실제 가격·거래량 확증
         if c["link"]:
             block += f"\n<{c['link']}>"
         alerts.append(block)
@@ -198,7 +247,7 @@ def main() -> None:
         indices = []
 
     alerts = []
-    alerts += check_indices(state, today, indices)
+    alerts += check_indices(state, today, indices, kst)
     alerts += check_fng(state)
     alerts += check_news(state)
 
