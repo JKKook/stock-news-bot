@@ -8,9 +8,13 @@
 
 import os
 import time
+import unicodedata
+
 import requests
 
-from config import EXCERPT_MAX_LEN, SOURCE_BLOOMBERG
+from config import (EXCERPT_MAX_LEN, SOURCE_BLOOMBERG, DISCLAIMER,
+                    TICKER_MOVE_FLAG, SHORT_INTEREST_FLAG,
+                    BLOOMBERG_EXCERPT_LEN, TICKERS, TICKER_SYMBOLS)
 
 DISCORD_LIMIT = 1900  # 디스코드 메시지 길이 제한(2000)보다 약간 작게
 
@@ -22,6 +26,166 @@ REGIONS = [("국내", "# 🇰🇷 국내 증시"), ("해외", "# 🇺🇸 해외
 def _fmt_chg(c: float) -> str:
     arrow = "▲" if c > 0 else ("▼" if c < 0 else "─")
     return f"{arrow} {c:+.2f}%"
+
+
+def _bb_label(pct: float) -> str:
+    """볼린저 %B → 표시 라벨. 밴드 안은 위치%, 밖은 상단↑/하단↓."""
+    if pct > 100:
+        return "BB 상단↑"   # 밴드 상단 위(과열 구간)
+    if pct < 0:
+        return "BB 하단↓"   # 밴드 하단 아래(과매도 구간)
+    return f"BB {pct:.0f}%"
+
+
+def _bb_zone(pct: float) -> str:
+    """볼린저 %B → 밴드 내 위치 서술(과매도/과열 같은 신호어 대신 위치어 사용)."""
+    if pct > 100:
+        return "밴드 상단 돌파"
+    if pct >= 80:
+        return "밴드 상단권"
+    if pct < 0:
+        return "밴드 하단 이탈"
+    if pct <= 20:
+        return "밴드 하단권"
+    return "밴드 중심권"
+
+
+def _per_desc(t, f) -> str:
+    """PER 서술 — Trailing/Forward 명칭 명확 + 두 값의 방향으로 이익 성장/감소 판단.
+    절대 고/저평가는 단정하지 않는다(정보성)."""
+    if t and t > 0:
+        s = f"Trailing PER {t:.1f}배"
+        if f and f > 0:
+            s += f" → Forward PER {f:.1f}배"
+            if f < t * 0.9:       # 미래 EPS↑ 기대 → Forward↓
+                s += " · 이익성장 기대"
+            elif f > t * 1.1:     # 미래 EPS↓ 우려 → Forward↑
+                s += " · 이익감소 우려"
+        return s
+    if f and f > 0:               # 국내주 등 trailing 결측 → forward만
+        return f"Forward PER {f:.1f}배"
+    if f is not None and f < 0:   # 적자 → PER 무의미
+        return "적자 (PER 해당없음)"
+    return ""
+
+
+def _assess_line(q: dict) -> str:
+    """볼린저 위치 + PER + (높을 때만)공매도 수급을 결합한 한 줄 판단.
+    정보성 — 매수/매도 신호 아님."""
+    parts = []
+    if q.get("bb_pct") is not None:
+        parts.append(_bb_zone(q["bb_pct"]))
+    per = _per_desc(q.get("per_trailing"), q.get("per_forward"))
+    if per:
+        parts.append(per)
+    sp = q.get("short_pct")
+    if sp is not None and sp >= SHORT_INTEREST_FLAG:   # (A) 공매도 높을 때만
+        arrow = "↑" if q.get("short_up") else ("↓" if q.get("short_up") is False else "")
+        parts.append(f"공매도 {sp:.0f}%{arrow}")
+    return "📐 " + " · ".join(parts) if parts else ""
+
+
+def _dwidth(s: str) -> int:
+    """표 정렬용 표시 폭 — 한중일 문자는 2, 그 외 1."""
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+
+
+def _pad(s: str, w: int, right: bool = False) -> str:
+    gap = " " * max(0, w - _dwidth(s))
+    return (gap + s) if right else (s + gap)
+
+
+def _per_num(d: dict) -> str:
+    """표용 PER 한 값 — Trailing 우선(개별 줄과 동일 기준), 없으면 Forward, 적자/결측 처리."""
+    t, f = d.get("per_trailing"), d.get("per_forward")
+    v = t if (t and t > 0) else (f if (f and f > 0) else None)
+    if v:
+        return f"{v:.0f}"
+    if (t is not None and t < 0) or (f is not None and f < 0):
+        return "적자"
+    return "-"
+
+
+def _cap_width(s: str, maxw: int) -> str:
+    """표시 폭 기준으로 문자열을 maxw 이하로 자른다(줄넘김 방지용 종목명 제한)."""
+    if _dwidth(s) <= maxw:
+        return s
+    out = ""
+    for ch in s:
+        if _dwidth(out + ch) > maxw:
+            break
+        out += ch
+    return out
+
+
+def _compact_price(v: float) -> str:
+    """해외(USD) 가격을 짧게 — 100↑ 정수, 그 외 소수."""
+    return f"{v:.0f}" if abs(v) >= 100 else f"{v:.1f}"
+
+
+def _price_kwon(v: float) -> str:
+    """국내 가격을 '천원' 단위로 — 2,425,000원→2425, 309,500→310, 1,141→1.1."""
+    k = v / 1000
+    return f"{k:.0f}" if abs(k) >= 10 else f"{k:.1f}"
+
+
+def _one_table(rows: list) -> list[str]:
+    """헤더행 포함 rows(가변 열) → monospace 표 라인들. 첫 열 좌측·나머지 우측 정렬.
+    열 간격 1칸으로 좁게 — 모바일에서 줄넘김 없이 한눈에 보이도록."""
+    ncol = len(rows[0])
+    widths = [max(_dwidth(r[i]) for r in rows) for i in range(ncol)]
+    lines = ["```"]
+    for i, r in enumerate(rows):
+        cells = [_pad(r[0], widths[0])] + [_pad(r[j], widths[j], True) for j in range(1, ncol)]
+        line = " ".join(cells)
+        lines.append(line)
+        if i == 0:
+            lines.append("─" * _dwidth(line))
+    lines.append("```")
+    return lines
+
+
+def _watchlist_table_blocks(quotes: dict) -> list[list[str]]:
+    """전 관심종목 지표를 국내/해외 2개 표(코드블록)로 — 한눈 요약(정보 밀도)."""
+    if not quotes:
+        return []
+    region_of = {label: region for label, _q, _l, region in TICKERS}
+    groups = {"해외": [], "국내": []}
+    for label, d in quotes.items():
+        r = region_of.get(label)
+        if r in groups:
+            groups[r].append((label, d))
+
+    body = ["### ⭐ 관심종목 지표"]
+    for region, flag in [("해외", "🇺🇸"), ("국내", "🇰🇷")]:
+        if not groups[region]:
+            continue
+        rows = [("종목", "가격", "등락", "BB", "PER")]
+        for label, d in groups[region]:
+            # 해외는 티커 심볼(좁고 인식됨)·USD, 국내는 한글명 10폭 컷·천원
+            if region == "해외":
+                name, price = (TICKER_SYMBOLS.get(label) or label), _compact_price(d["price"])
+            else:
+                name, price = _cap_width(label, 10), _price_kwon(d["price"])
+            bb = f"{d['bb_pct']:.0f}" if d.get("bb_pct") is not None else "-"
+            rows.append((name, price, f"{d['chg']:+.1f}%", bb, _per_num(d)))
+        body.append(f"**{flag} {region}**")
+        body += _one_table(rows)
+    body.append("_국내 가격=천원 · 해외=$ · BB=볼린저%B(중심50) · PER=Trailing_")
+    return [body] if len(body) > 2 else []
+
+
+def _quote_line(q: dict) -> str:
+    """관심종목 시세 한 줄 (P0-1): 현재가 · 등락% · 52주 위치 · 볼린저 %B.
+    52주 위치 = 최근 1년 저가~고가 구간에서의 백분위. BB% = 15일 밴드 내 위치(중심 50)."""
+    price = q["price"]
+    p = f"{price:,.0f}" if q.get("currency") == "KRW" else f"{price:,.2f}"
+    line = f"📊 {p} {_fmt_chg(q['chg'])}"
+    if q.get("w52pos") is not None:
+        line += f" · 52주 {q['w52pos']:.0f}%"
+    if q.get("bb_pct") is not None:
+        line += f" · {_bb_label(q['bb_pct'])}"
+    return line
 
 
 def _fg_zone(score: float):
@@ -40,7 +204,7 @@ def _dashboard_blocks(indices, fear_greed) -> list[list[str]]:
     """맨 위 대시보드: 주요 지수 시세 + CNN 공포탐욕지수."""
     blocks = []
     if indices:
-        b = ["## 📊 주요 지수 시세"]
+        b = ["### 📊 주요 지수 시세"]
         for ix in indices:
             b.append(f"{ix['flag']} **{ix['name']}**  {ix['price']:,.2f}  {_fmt_chg(ix['chg'])}")
         blocks.append(b)
@@ -51,7 +215,7 @@ def _dashboard_blocks(indices, fear_greed) -> list[list[str]]:
         filled = round(score / 100 * 20)
         bar = "█" * filled + "░" * (20 - filled)
         fb = [
-            f"## {emoji} 공포탐욕지수 (CNN)",
+            f"### {emoji} 공포탐욕지수 (CNN)",
             f"**{score:.0f} / 100 — {zone} ({fear_greed['rating'].title()})**",
             f"`[{bar}]`",
         ]
@@ -66,6 +230,55 @@ def _dashboard_blocks(indices, fear_greed) -> list[list[str]]:
     return blocks
 
 
+_CTRY_FLAG = {"US": "🇺🇸", "KR": "🇰🇷", "EA": "🇪🇺", "CN": "🇨🇳", "JP": "🇯🇵", "GB": "🇬🇧"}
+_IMPACT_STARS = {"High": "★★★", "Medium": "★★☆", "Low": "★☆☆"}
+
+
+def _summary_blocks(summary: dict) -> list[list[str]]:
+    """상단 'so-what' 요약 (P1) — 무엇이 바뀌었나/왜 중요한가/무엇을 지켜볼까."""
+    if not summary:
+        return []
+    b = ["### 🧭 오늘의 핵심 (AI 요약)"]
+    if summary.get("what_changed"):
+        b.append(f"**무엇이 바뀌었나** — {summary['what_changed']}")
+    if summary.get("why_matters"):
+        b.append(f"**왜 중요한가** — {summary['why_matters']}")
+    if summary.get("watch"):
+        b.append(f"**무엇을 지켜볼까** — {summary['watch']}")
+    if summary.get("affected"):
+        b.append(f"**관심 대상 연결** — {summary['affected']}")  # (P1-6) 사건→섹터/종목
+    return [b] if len(b) > 1 else []
+
+
+def _catalyst_blocks(catalysts: dict) -> list[list[str]]:
+    """다가오는 '예정 촉매' — 경제지표(임팩트 별점) + 관심종목 실적 (P0-4)."""
+    if not catalysts:
+        return []
+    econ = catalysts.get("economic") or []
+    earn = catalysts.get("earnings") or []
+    if not econ and not earn:
+        return []
+
+    body = ["### 📅 예정 촉매 · 중기"]  # (P2-8) 호라이즌 라벨
+    if econ:
+        body.append("**경제지표**")
+        for e in econ:
+            flag = _CTRY_FLAG.get(e["country"], e["country"])
+            stars = _IMPACT_STARS.get(e["impact"], "")
+            body.append(f"{stars} `{e['date']}` {flag} {e['event']}")
+    if earn:
+        if econ:
+            body.append("")   # 경제지표 ↔ 실적 사이 여백(margin) 통일
+        body.append("**관심종목 실적**")
+        # 날짜별로 티커 묶어 한 줄씩
+        by_date = {}
+        for x in earn:
+            by_date.setdefault(x["date"], []).append(x["name"])
+        for d in sorted(by_date):
+            body.append(f"`{d}` " + " · ".join(by_date[d]))
+    return [body]
+
+
 def _cut(text: str, maxlen: int) -> str:
     text = text.strip()
     if len(text) <= maxlen:
@@ -76,14 +289,17 @@ def _cut(text: str, maxlen: int) -> str:
     return cut + "…"
 
 
-def _item_blocks(items: list[dict]) -> list[list[str]]:
+def _item_blocks(items: list[dict], show_region: bool = False) -> list[list[str]]:
     """기사 1건 = ['• 제목 (출처)'] (발췌문 있으면 다음 줄) 묶음. 묶음은 분할되지 않는다.
     같은 소제목 안의 기사들은 붙이고, 그룹 끝에 빈 줄을 둬 다음 소제목과 분리한다.
-    """
+    show_region=True 면 항목 앞에 🇰🇷/🇺🇸(테마 뉴스처럼 지역이 섞일 때)."""
     blocks = []
     for it in items:
         src = f" ({it['source']})" if it["source"] else ""
-        block = [f"• {it['title']}{src}"]
+        rf = ""
+        if show_region:
+            rf = "🇰🇷 " if it.get("region") == "국내" else "🇺🇸 " if it.get("region") == "해외" else ""
+        block = [f"• {rf}{it['title']}{src}"]
         if it["excerpt"]:
             block.append(_cut(it["excerpt"], EXCERPT_MAX_LEN))
         blocks.append(block)
@@ -92,13 +308,13 @@ def _item_blocks(items: list[dict]) -> list[list[str]]:
     return blocks
 
 
-def _section(header: str, labeled_groups: list) -> list[list[str]]:
+def _section(header: str, labeled_groups: list, show_region: bool = False) -> list[list[str]]:
     """섹션 헤더 + 소제목이 항상 첫 기사와 붙어 다니도록 블록을 구성.
     labeled_groups: [(소제목, items), ...]
     """
     out, pending = [], header
     for label, items in labeled_groups:
-        ibs = _item_blocks(items)
+        ibs = _item_blocks(items, show_region)
         lead = [label] + (ibs[0] if ibs else [])
         if pending:
             lead = [pending] + lead
@@ -108,17 +324,112 @@ def _section(header: str, labeled_groups: list) -> list[list[str]]:
     return out  # 빈 섹션이면 빈 리스트
 
 
-def _region_blocks(title, market, sectors_grouped, tickers) -> list[list[str]]:
+def _grouped_blocks(header: str, labeled_groups: list, show_region: bool = False) -> list[list[str]]:
+    """소제목+기사들을 '소제목당 한 블록'으로 묶는다 — 메시지 분할 시 헤더-기사 고아 방지.
+    첫 블록에 섹션 헤더를 붙이고, 각 그룹 끝에 빈 줄(margin)을 둔다."""
+    out, first = [], True
+    for label, items in labeled_groups:
+        lines = [label]
+        for it in items:
+            rf = ""
+            if show_region:
+                rf = "🇰🇷 " if it.get("region") == "국내" else "🇺🇸 " if it.get("region") == "해외" else ""
+            src = f" ({it['source']})" if it.get("source") else ""
+            lines.append(f"• {rf}{it['title']}{src}")
+            if it.get("excerpt"):
+                lines.append(_cut(it["excerpt"], EXCERPT_MAX_LEN))
+        lines.append("")  # 그룹 사이 여백
+        if first:
+            lines = [header] + lines
+            first = False
+        out.append(lines)
+    return out
+
+
+def _theme_news_blocks(sectors: list[dict]) -> list[list[str]]:
+    """테마별 소식 — 테마(섹터) 단위로 국내+해외 뉴스를 함께 묶는다(SECTORS 순서 유지)."""
+    by_theme, order = {}, []
+    for g in sectors:
+        if not g["items"]:
+            continue
+        if g["label"] not in by_theme:
+            by_theme[g["label"]] = []
+            order.append(g["label"])
+        by_theme[g["label"]] += g["items"]
+    if not order:
+        return []
+    labeled = [(f"**{lbl}**", by_theme[lbl]) for lbl in order]
+    return _grouped_blocks("### 🏭 테마별 소식 · 장기 테마", labeled, show_region=True)
+
+
+def _watchlist_news_blocks(tickers: list[dict], quotes=None) -> list[list[str]]:
+    """관심종목 뉴스 — 뉴스 있는 종목만, 뉴스 불릿만(수치·판단은 상단 표에). 변동폭 큰 순."""
+    groups = [g for g in tickers if g["items"]]
+    if not groups:
+        return []
+
+    def move(g):
+        q = (quotes or {}).get(g["label"])
+        return abs(q["chg"]) if q else -1.0
+
+    labeled = []
+    for g in sorted(groups, key=move, reverse=True):
+        q = (quotes or {}).get(g["label"])
+        flag = " 🔥" if (q and abs(q["chg"]) >= TICKER_MOVE_FLAG) else ""
+        rf = "🇰🇷 " if g.get("region") == "국내" else "🇺🇸 " if g.get("region") == "해외" else ""
+        labeled.append((f"**{rf}{g['label']}**{flag}", g["items"]))
+    return _grouped_blocks("### ⭐ 관심종목 뉴스", labeled)
+
+
+def _watchlist_highlights(quotes: dict) -> list[list[str]]:
+    """표 아래 '주목' 한 줄 — 밴드 극단(≤20/≥80)이거나 급변(±5%↑)인 종목의 핵심 판단(표=수치+판단)."""
+    if not quotes:
+        return []
+    cand = []
+    for label, q in quotes.items():
+        bb = q.get("bb_pct")
+        big = abs(q.get("chg", 0)) >= TICKER_MOVE_FLAG
+        extreme = bb is not None and (bb <= 20 or bb >= 80)
+        if not (big or extreme):
+            continue
+        bits = [_fmt_chg(q["chg"])]
+        if bb is not None:
+            bits.append(_bb_zone(bb))
+        sp = q.get("short_pct")
+        if sp is not None and sp >= SHORT_INTEREST_FLAG:
+            bits.append(f"공매도 {sp:.0f}%")
+        cand.append((abs(q.get("chg", 0)), f"{label} " + "·".join(bits)))
+    if not cand:
+        return []
+    cand.sort(reverse=True)   # 변동폭 큰 순 상위 4개만
+    return [["📐 **주목** — " + "  /  ".join(n for _, n in cand[:4])]]
+
+
+def _region_blocks(title, market, sectors_grouped, tickers, quotes=None) -> list[list[str]]:
     blocks = [[title]]
     if market:
-        blocks += _section("## 📰 시장 뉴스",
+        blocks += _section("### 📰 시장 뉴스",
                            [(f"**{g['label']}**", g["items"]) for g in market])
     if sectors_grouped:
-        blocks += _section("## 🏭 섹터별 소식",
+        blocks += _section("### 🏭 섹터별 소식 · 장기 테마",  # (P2-8) 호라이즌 라벨
                            [(f"**{lbl}**", items) for lbl, items in sectors_grouped])
     if tickers:
-        blocks += _section("## ⭐ 관심 종목",
-                           [(f"**{g['label']}**", g["items"]) for g in tickers])
+        # (P0-1) 종목명 옆에 시세 첨부 + (P0-2) 변동폭 큰 순 정렬·급변 🔥 표시
+        def move(g):
+            q = (quotes or {}).get(g["label"])
+            return abs(q["chg"]) if q else -1.0   # 시세 있는 큰 변동 먼저, 없으면 뒤로
+        labeled = []
+        for g in sorted(tickers, key=move, reverse=True):
+            q = (quotes or {}).get(g["label"])
+            flag = " 🔥" if (q and abs(q["chg"]) >= TICKER_MOVE_FLAG) else ""
+            label = f"**{g['label']}**{flag}"
+            if q:
+                label += f"\n{_quote_line(q)}"          # 시세는 다음 줄
+                assess = _assess_line(q)                # 볼린저+PER 판단은 또 다음 줄
+                if assess:
+                    label += f"\n{assess}"
+            labeled.append((label, g["items"]))
+        blocks += _section("### ⭐ 관심 종목", labeled)
     return blocks
 
 
@@ -145,13 +456,13 @@ def _emit(blocks: list[list[str]]) -> list[str]:
                 messages.append(text[i:i + DISCORD_LIMIT])
             continue
 
-        # 섹션(##/#) 앞에 빈 줄 2개를 둬서 영역 구분을 확실히
-        sep = "\n\n" if (current and is_header) else ""
-        if current and len(current) + len(sep) + len(text) + 1 > DISCORD_LIMIT:
+        # 섹션(##/#) 헤더 앞은 '정확히 빈 줄 1개'로 통일 — 그룹 끝 빈 줄과 겹쳐도 중복 방지
+        if current and is_header:
+            current = current.rstrip("\n") + "\n\n"
+        if current and len(current) + len(text) + 1 > DISCORD_LIMIT:
             messages.append(current.rstrip())
             current = ""
-            sep = ""
-        current += sep + text + "\n"
+        current += text + "\n"
 
     if current.strip():
         messages.append(current.rstrip())
@@ -164,12 +475,25 @@ def _bloomberg_blocks(items: list[dict]) -> list[list[str]]:
     for i, it in enumerate(items):
         b = [f"• {it['title']} (Bloomberg)"]
         if it.get("excerpt"):
-            b.append(_cut(it["excerpt"], EXCERPT_MAX_LEN))
+            b.append(_cut(it["excerpt"], BLOOMBERG_EXCERPT_LEN))  # 1~2줄만(링크는 하단 Source)
         # 링크는 본문에 달지 않고 Source 영역에서만 제공
         if i == 0:
-            b = ["## 🏦 블룸버그 주요 기사"] + b  # 헤더를 첫 기사와 묶어 고아 방지
+            b = ["### 🏦 블룸버그 주요 기사"] + b  # 헤더를 첫 기사와 묶어 고아 방지
         out.append(b)
     return out
+
+
+def _glossary_blocks() -> list[list[str]]:
+    """하단 용어 주석 — 판단 줄에 쓰인 어려운 용어 설명."""
+    return [[
+        "### 📖 용어 (참고)",
+        "**Trailing PER**: 최근 12개월 *실제* 이익 기준(주가 ÷ 지난 1년 EPS). 확정 실적.",
+        "**Forward PER**: 향후 12개월 *예상* 이익 기준. Forward < Trailing → 이익성장 기대, 반대 → 이익감소 우려.",
+        "**EPS**: 주당순이익(순이익 ÷ 주식 수).",
+        "**BB %B (볼린저)**: 15일 이동평균 ±2×표준편차 밴드에서 현재가 위치(하단 0 · 중심 50 · 상단 100).",
+        "**52주 위치**: 최근 1년 저가~고가 구간에서 현재가의 백분위.",
+        "**공매도 %**: 유통주식 대비 공매도 잔량 비율(높을수록 하락 베팅 큼). ↑ 전월 대비 증가 · ↓ 감소.",
+    ]]
 
 
 def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[list[str]]:
@@ -195,7 +519,7 @@ def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[lis
             continue
         lead = [f"**[{label}]**", entry(*items[0])]
         if not header_done:
-            lead = ["## 🔗 Source (주요 기사 링크)"] + lead
+            lead = ["### 🔗 Source (주요 기사 링크)"] + lead
             header_done = True
         blocks.append(lead)
         for t, l in items[1:]:
@@ -203,55 +527,47 @@ def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[lis
     return blocks
 
 
-def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links) -> list[str]:
+def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links, quotes=None, catalysts=None, summary=None) -> list[str]:
     blocks = [[SEPARATOR, header]]  # 맨 앞 구분선
 
     # 📊 맨 위 대시보드 — 주요 지수 시세 + 공포탐욕지수
     blocks += _dashboard_blocks(indices, fear_greed)
 
-    # 0) 대표 링크 — Yahoo Finance 헤드라인 1개 (브리핑 내 유일한 링크)
-    if yahoo:
-        b = ["## 📈 Yahoo Finance 대표 헤드라인", yahoo["title"]]
-        if yahoo["link"]:
-            b.append(yahoo["link"])
-        blocks.append(b)
+    # 🧭 오늘의 핵심 — AI so-what 요약 (무엇이 바뀌었나/왜 중요한가/무엇을 지켜볼까)
+    blocks += _summary_blocks(summary)
 
-    # 1) 오늘의 헤드라인 — 국내/해외 분리
+    # 📅 예정 촉매 — 경제지표 + 관심종목 실적 (다가오는 이벤트를 먼저)
+    blocks += _catalyst_blocks(catalysts)
+
+    # ⭐ 관심종목 지표 요약표 — 전 종목 한눈에(시세·등락·52주·BB·PER)
+    blocks += _watchlist_table_blocks(quotes)
+    # 표 아래 '주목' — 밴드 극단·급변 종목의 핵심 판단(표=수치+판단)
+    blocks += _watchlist_highlights(quotes)
+
+    # 🔥 오늘의 헤드라인 — 국내/해외 (유지)
     if headlines and (headlines.get("국내") or headlines.get("해외")):
-        hb = [f"## 🔥 오늘의 헤드라인 ({today})"]
+        hb = [f"### 🔥 오늘의 헤드라인 ({today})"]
         for region, flag in [("국내", "🇰🇷"), ("해외", "🇺🇸")]:
             hs = headlines.get(region) or []
             if hs:
+                if len(hb) > 1:
+                    hb.append("")   # 지역 그룹 사이 여백(margin) 통일
                 hb.append(f"**{flag} {region}**")
                 hb += [f"{i}. {t}" for i, t in enumerate(hs, 1)]
         blocks.append(hb)
 
-    # 2~4) 지역별 묶음 (각 지역은 새 메시지로 시작)
-    for region, title in REGIONS:
-        m = [g for g in market if g["region"] == region and g["items"]]
+    # 🏭 테마별 소식 — 국내+해외 통합(테마축). 📰 시장뉴스·Yahoo 헤드라인은 폐지.
+    blocks += _theme_news_blocks(sectors)
 
-        # 섹터: 같은 지역의 섹터들을 SECTORS 순서대로 묶음
-        sg, order = {}, []
-        for g in sectors:
-            if g["region"] != region or not g["items"]:
-                continue
-            if g["label"] not in sg:
-                sg[g["label"]] = []
-                order.append(g["label"])
-            sg[g["label"]] += g["items"]
-        sectors_grouped = [(lbl, sg[lbl]) for lbl in order]
+    # ⭐ 관심종목 뉴스 — 뉴스 있는 종목만, 뉴스 불릿만(수치·판단은 위 표에)
+    blocks += _watchlist_news_blocks(tickers, quotes)
 
-        t = [g for g in tickers if g["region"] == region and g["items"]]
-        bb = bloomberg if region == "해외" else []  # 블룸버그는 해외 섹션에만
+    # 맨 끝 Source 링크 모음 (블룸버그는 섹션·Source 모두 제외)
+    blocks += _source_blocks(source_links)
 
-        if m or sectors_grouped or t or bb:
-            blocks += _region_blocks(title, m, sectors_grouped, t)
-            blocks += _bloomberg_blocks(bb)
-
-    # 맨 끝 Source 링크 모음 (블룸버그 주요 기사도 하이퍼링크로 포함)
-    blocks += _source_blocks(source_links, bloomberg[:SOURCE_BLOOMBERG])
-
-    blocks.append([SEPARATOR])  # 맨 뒤 구분선
+    blocks += _glossary_blocks()  # 용어 주석
+    blocks.append([DISCLAIMER])  # (P0-3) 면책 — 매수/매도 신호 아님
+    blocks.append([SEPARATOR])   # 맨 뒤 구분선
     return _emit(blocks)
 
 
