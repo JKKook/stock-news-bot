@@ -5,3 +5,4 @@ venv/
 .env
 
 alert_state.json
+summary_cache.json

@@ -3,7 +3,11 @@
 #  공통 형식:  ("보여줄 이름", "구글뉴스 검색어", "언어", "지역")
 #    · 언어 → 한국 뉴스 "ko" / 미국 뉴스 "en"
 #    · 지역 → 헤드라인 앞에 붙는 표기  "국내" / "해외"
+#  ※ 관심종목은 watchlist.json 에서 편집(코드 수정 불필요). 아래 정의는 폴백 기본값.
 # ════════════════════════════════════════════════════════════════
+
+import os
+import json
 
 # 최근 몇 시간 이내 뉴스만 표시할지 (이보다 오래된 기사는 제외)
 # 구글 뉴스는 신선해서 12시간이면 직전 발송 이후 새 소식 위주로 보임
@@ -49,6 +53,14 @@ KR_HOLIDAYS = [
 # (P1) AI 'so-what' 요약에 쓸 Gemini 모델 (Google AI Studio 무료 티어).
 #   gemini-2.0-flash 는 무료 쿼터 0(429)이라 2.5-flash 사용(검증됨). 대안: "gemini-flash-latest".
 SUMMARY_MODEL = "gemini-2.5-flash"
+# (P4-1) 폴백 체인 — 1차 모델이 429(쿼터)·실패면 순차로 다른 모델 시도(요약이 조용히 사라지지 않게).
+SUMMARY_FALLBACK_MODELS = ["gemini-flash-latest", "gemini-2.5-flash-lite"]
+SUMMARY_CACHE_TTL_H = 6   # 동일 헤드라인 재요약 방지(테스트·중복실행 보호). 0이면 캐시 끔.
+
+# (P4-2) 의미 기반 근접 중복 제거 — 토큰 겹침이 못 잡는 '다른 표현·같은 사건'을 임베딩 유사도로.
+#   요약과 별도 모델/쿼터. 한국어 뉴스는 무관해도 baseline 유사도(~0.6)가 높아 임계값을 높게 둔다.
+EMBED_MODEL = "gemini-embedding-001"
+SEMANTIC_DUP_THRESHOLD = 0.80
 
 # (P0-2) 관심종목 이례성 강조 — 이 %이상 변동한 종목은 🔥로 표시하고 위로 정렬.
 #   최신순이 아니라 '움직임이 큰(=이례적) 것 먼저' 보여줘 판단 우선순위를 준다.
@@ -61,6 +73,15 @@ BB_K = 2.0       # 밴드 폭(표준편차 배수)
 
 # (A) 미국 공매도 수급 — 공매도 비율이 이 %이상일 때만 판단 줄에 표시(노이즈 방지).
 SHORT_INTEREST_FLAG = 10.0
+
+# (P3-2) 되돌림·선반영 경고 — 당일 |등락|이 이 %↑ 이면서 볼린저 밴드 상단권(≥80)/하단권(≤20)까지
+#   같은 방향으로 겹칠 때만 '이미 큰 폭 반영·추격 주의' 라벨을 붙인다(급변+통계적 과확장 동시).
+#   근거: 극단 헤드라인은 이미 과반영→되돌림(Kwon&Tang), 보유종목 과잉반응(QJE). 매매신호 아님.
+REVERSAL_MOVE_FLAG = 7.0
+
+# (P3-1) 거래량 게이팅 — 당일 거래량이 직전 평균의 이 배수↑ 이면 '거래량 동반'으로 표시.
+#   가격 급변이 거래량을 동반하면 실제 참여 폭발(=이례성/선반영 강도)로 본다.
+VOLUME_FLAG = 1.5
 
 # ── (P0-4) 촉매 캘린더 ──────────────────────────────────────────
 #   투자 판단의 앵커인 '예정 이벤트'(경제지표 + 관심종목 실적)를 미리 보여준다.
@@ -123,6 +144,7 @@ INDICES = [
     ("코스피",   "^KS11",   "🇰🇷"),
     ("코스닥",   "^KQ11",   "🇰🇷"),
     ("나스닥",   "^IXIC",   "🇺🇸"),
+    ("나스닥선물", "NQ=F",   "🇺🇸"),   # 야간선물 — 한국 투자자가 밤새 보는 선행지표
     ("S&P500",  "^GSPC",   "🇺🇸"),
     ("다우",     "^DJI",    "🇺🇸"),
     ("VIX",     "^VIX",    "🌐"),
@@ -258,6 +280,28 @@ TICKER_SYMBOLS = {
 }
 
 
+# (개인화) watchlist.json 이 있으면 관심종목을 그걸로 대체 — 코드 수정 없이 편집.
+#   위 TICKER_SYMBOLS/TICKERS 는 파일이 없거나 파싱 실패 시 쓰이는 폴백 기본값.
+def _apply_watchlist_json():
+    global TICKER_SYMBOLS, TICKERS
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.json")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            wl = json.load(f)
+        ts = {w["label"]: w.get("symbol") for w in wl}
+        tk = [(w["label"], w.get("query") or w["label"],
+               w.get("lang", "ko"), w.get("region", "국내")) for w in wl]
+        if ts and tk:                    # 비어 있으면 기본값 유지(안전)
+            TICKER_SYMBOLS, TICKERS = ts, tk
+    except Exception as e:
+        print(f"⚠️  watchlist.json 파싱 실패({e}) — 내장 기본 관심종목 사용")
+
+
+_apply_watchlist_json()
+
+
 # ════════════════════════════════════════════════════════════════
 #  5) 관심 종목 '이슈' 선별 키워드
 #     · INCLUDE 단어가 하나라도 있으면 '특정 이슈'로 보고 채택
@@ -288,6 +332,7 @@ ALERT_INDICES = [
     ("코스피",   "^KS11", "🇰🇷"),
     ("코스닥",   "^KQ11", "🇰🇷"),
     ("나스닥",   "^IXIC", "🇺🇸"),
+    ("나스닥선물", "NQ=F", "🇺🇸"),   # 야간선물 급변도 속보로(정규장/야선 세션 라벨로 구분)
     ("S&P500",  "^GSPC", "🇺🇸"),
     ("다우",     "^DJI",  "🇺🇸"),
 ]
@@ -296,6 +341,10 @@ ALERT_INDEX_BANDS = [5, 8, 15, 20]   # 5%↑ 급변 / 8·15·20%는 서킷브레
 ALERT_FNG_DELTA = 15                 # 공포탐욕지수가 직전 알림 대비 이만큼 변하면 알림
 ALERT_LOOKBACK_MIN = 90              # 이 시간 이내 발행된 기사만 속보로 인정
 ALERT_MAX_PER_RUN = 6                # 한 번 실행에서 보낼 최대 속보 수(과알림 방지)
+# (P3 확장) 속보 가격·거래량 확증 — 속보가 관심종목을 지목하면 실제 |등락|이 이 %↑ 일 때
+#   '📈 실제 반응 동반'(진짜 이례성)으로 확증, 미만이면 '📉 가격 반응 미미'(선반영/영향 제한 가능).
+#   발송은 억제하지 않고 주석만 붙인다(뉴스가 가격을 선행할 수 있어 신속성 보존).
+ALERT_CONFIRM_MOVE = 3.0
 
 # 속보 검색 — (검색어, 언어, 지역)
 ALERT_NEWS_QUERIES = [
