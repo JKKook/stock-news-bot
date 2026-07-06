@@ -436,21 +436,26 @@ def _kr_flow_blocks(quotes: dict) -> list[list[str]]:
     return [lines]
 
 
-def _reversal_warnings(quotes: dict) -> list[list[str]]:
-    """(P3-2) 급변(±REVERSAL_MOVE_FLAG%↑) + 볼린저 밴드 같은 방향 과확장(상단권/하단권)이
-    겹친 종목에 '이미 큰 폭 반영·추격 주의' 맥락 라벨. 정보성 행동재무 경고 — 매매신호 아님.
-    급등/급락 소식에 추격 진입하려는 충동을 '이미 가격에 반영됐을 수 있다'로 눌러준다."""
-    if not quotes:
-        return []
-    hits = []
-    for label, q in quotes.items():
+def _reversal_hits(quotes: dict) -> list:
+    """되돌림 경고 대상 종목 = 급변(±REVERSAL_MOVE_FLAG%↑) + 밴드 같은 방향 과확장(상단권≥80/하단권≤20).
+    [(label, q), ...] 반환. 렌더(_reversal_warnings)와 측정(measure.R1)이 같은 판정을 쓰게 공유."""
+    out = []
+    for label, q in (quotes or {}).items():
         chg, bb = q.get("chg"), q.get("bb_pct")
         if chg is None or bb is None or abs(chg) < REVERSAL_MOVE_FLAG:
             continue
-        stretched = (chg > 0 and bb >= 80) or (chg < 0 and bb <= 20)  # 급변과 같은 방향 과확장
-        if not stretched:
-            continue
-        desc = f"{label} {chg:+.1f}%·{_bb_zone(bb)}"
+        if (chg > 0 and bb >= 80) or (chg < 0 and bb <= 20):   # 급변과 같은 방향 과확장
+            out.append((label, q))
+    return out
+
+
+def _reversal_warnings(quotes: dict) -> list[list[str]]:
+    """(P3-2) 되돌림 경고 렌더 — '이미 큰 폭 반영·추격 주의' 맥락 라벨. 정보성 행동재무 경고.
+    급등/급락 소식에 추격 진입하려는 충동을 '이미 가격에 반영됐을 수 있다'로 눌러준다."""
+    hits = []
+    for label, q in _reversal_hits(quotes):
+        chg = q.get("chg")
+        desc = f"{label} {chg:+.1f}%·{_bb_zone(q.get('bb_pct'))}"
         vm = q.get("vol_mult")
         if vm is not None and vm >= VOLUME_FLAG:   # (P3-1) 거래량 동반이면 선반영 강도↑
             desc += f"·거래량 {vm:.1f}×"
@@ -602,7 +607,7 @@ def _headline_blocks(headlines, today) -> list[list[str]]:
     return [hb]
 
 
-def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links, quotes=None, catalysts=None, summary=None) -> list[str]:
+def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links, quotes=None, catalysts=None, summary=None, accuracy=None) -> list[str]:
     # (P2-8 풀버전) 섹션을 투자 호라이즌 3개 층으로 묶는다 — 혼합 사용자가 '내 층'만 스캔.
     #   divider는 폰트를 키우지 않는 작은 볼드(**━━ … ━━**), _emit이 각 층을 새 메시지로 시작.
     short = (_dashboard_blocks(indices, fear_greed)      # 지금 시장 현황
@@ -610,6 +615,7 @@ def build_messages(header, today, indices, fear_greed, yahoo, headlines, market,
              + _watchlist_table_blocks(quotes)           # 관심종목 수치
              + _watchlist_highlights(quotes)             # 주목(급변·밴드 극단)
              + _reversal_warnings(quotes)                # 추격 주의(선반영)
+             + (accuracy or [])                          # (R1) 판정 정확도 사후검증
              + _kr_flow_blocks(quotes)                   # 국내 수급
              + _headline_blocks(headlines, today))       # 오늘의 헤드라인
     mid = _catalyst_blocks(catalysts)                    # 예정 촉매(수일~수주)
