@@ -10,3 +10,4 @@ node_modules/
 .wrangler/
 .dev.vars
 prediction_log.json
+.DS_Store
