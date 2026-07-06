@@ -134,7 +134,40 @@ def _confirm_move(title: str) -> str:
     return ("\n" + " · ".join(parts)) if parts else ""
 
 
-def check_news(state: dict) -> list[str]:
+def _market_confirm(title: str, indices: list) -> str:
+    """(R2) 속보 제목이 지수·시장·지정학을 지목하면 실제 지수/VIX 움직임으로 확증/주의.
+    · 지수 |등락|≥ALERT_MARKET_MOVE → '📈 {지수} 실제 반응', 미만 → '📉 시장 반응 미미'
+    · 지정학 키워드 + VIX 급등 → '📈 VIX 공포 급등'
+    indices(get_indices 결과)를 재사용 — 추가 호출 없음. 관심종목 확증(_confirm_move)과 상호보완.
+    '제목만 자극적이고 시장은 무반응'인 속보를 가려낼 근거를 준다. 매매신호 아님."""
+    if not indices:
+        return ""
+    idx = {i["name"]: i for i in indices}
+    low = title.lower()
+    parts = []
+    for keywords, candidates in config.ALERT_MARKET_MAP:
+        if not any(k in low for k in keywords):
+            continue
+        avail = [idx[n] for n in candidates if n in idx]
+        if not avail:
+            continue
+        rep = max(avail, key=lambda i: abs(i["chg"]))   # 가장 크게 움직인 것 = 대표 반응
+        chg = rep["chg"]
+        if abs(chg) >= config.ALERT_MARKET_MOVE:
+            parts.append(f"📈 {rep['name']} {chg:+.1f}% 실제 반응")
+        else:
+            parts.append(f"📉 {rep['name']} {chg:+.1f}%(시장 반응 미미)")
+    if any(k.lower() in low for k in config.ALERT_GEO_KEYWORDS):   # 지정학 → VIX
+        vix = idx.get("VIX")
+        if vix:
+            if vix["chg"] >= config.ALERT_VIX_SPIKE:
+                parts.append(f"📈 VIX {vix['chg']:+.1f}% 공포 급등")
+            else:
+                parts.append(f"📉 VIX {vix['chg']:+.1f}%(공포 반응 미미)")
+    return ("\n" + " · ".join(parts)) if parts else ""
+
+
+def check_news(state: dict, indices: list) -> list[str]:
     sent = set(state.get("sent", []))
     events = dict(state.get("events", {}))   # 사건 지문 → 마지막 알림 시각(ISO)
     now = datetime.now(timezone.utc)
@@ -195,7 +228,8 @@ def check_news(state: dict) -> list[str]:
         shown = c["title"] if c["lang"] == "ko" else translate_text(c["title"])
         flag = "🇰🇷" if c["region"] == "국내" else "🇺🇸"
         block = f"{headline(c['title'])} {flag}\n{shown}" + (f" ({c['src']})" if c["src"] else "")
-        block += _confirm_move(c["title"])   # (P3) 관심종목 지목 시 실제 가격·거래량 확증
+        block += _confirm_move(c["title"])            # (P3) 관심종목 지목 시 가격·거래량 확증
+        block += _market_confirm(c["title"], indices)  # (R2) 지수·지정학 지목 시 시장 반응 확증
         if c["link"]:
             block += f"\n<{c['link']}>"
         alerts.append(block)
@@ -249,7 +283,7 @@ def main() -> None:
     alerts = []
     alerts += check_indices(state, today, indices, kst)
     alerts += check_fng(state)
-    alerts += check_news(state)
+    alerts += check_news(state, indices)
 
     save_state(state)
 
