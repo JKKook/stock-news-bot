@@ -47,8 +47,41 @@ KR_HOLIDAYS = [
     "10-03",  # 개천절
     "10-09",  # 한글날
     "12-25",  # 성탄절
-    # 음력·대체공휴일은 아래에 "MM-DD"로 추가(예: 설날·추석 연휴)
 ]
+
+# (R9) 음력 공휴일(설날·추석 연휴 + 부처님오신날)은 해마다 양력 날짜가 달라 자동 계산한다.
+#   korean_lunar_calendar 로 해당 연도의 양력일을 구함(없으면 조용히 생략 — 고정 공휴일만 적용).
+_lunar_cache = {}
+
+
+def lunar_holidays(year: int) -> set:
+    """해당 연도 음력 공휴일의 양력 'MM-DD' 집합 — 설날·추석(각 전후 연휴 포함)·부처님오신날."""
+    if year in _lunar_cache:
+        return _lunar_cache[year]
+    out = set()
+    try:
+        from datetime import date, timedelta
+        from korean_lunar_calendar import KoreanLunarCalendar
+        c = KoreanLunarCalendar()
+
+        def solar(lm, ld):
+            c.setLunarDate(year, lm, ld, False)
+            return date.fromisoformat(c.SolarIsoFormat())
+
+        for base in (solar(1, 1), solar(8, 15)):     # 설날·추석: 전날~다음날 3일 연휴
+            for delta in (-1, 0, 1):
+                out.add(f"{base + timedelta(days=delta):%m-%d}")
+        out.add(f"{solar(4, 8):%m-%d}")              # 부처님오신날
+    except Exception:
+        out = set()
+    _lunar_cache[year] = out
+    return out
+
+
+def is_kr_holiday(d) -> bool:
+    """d(date)가 한국 공휴일인지 — 고정 양력(KR_HOLIDAYS) + 음력 공휴일(해당 연도 계산)."""
+    mmdd = f"{d:%m-%d}"
+    return mmdd in KR_HOLIDAYS or mmdd in lunar_holidays(d.year)
 
 # (P1) AI 'so-what' 요약에 쓸 Gemini 모델 (Google AI Studio 무료 티어).
 #   gemini-2.0-flash 는 무료 쿼터 0(429)이라 2.5-flash 사용(검증됨). 대안: "gemini-flash-latest".
@@ -302,8 +335,13 @@ TICKER_SYMBOLS = {
 
 # (개인화) watchlist.json 이 있으면 관심종목을 그걸로 대체 — 코드 수정 없이 편집.
 #   위 TICKER_SYMBOLS/TICKERS 는 파일이 없거나 파싱 실패 시 쓰이는 폴백 기본값.
+# (R7) 종목별 속보 알림 on/off — watchlist.json 각 종목의 "alert":false 면 속보 확증 대상에서 제외.
+#   기본 true. 비어 있으면(.get 기본값) 모든 종목 알림 대상.
+TICKER_ALERT = {}
+
+
 def _apply_watchlist_json():
-    global TICKER_SYMBOLS, TICKERS
+    global TICKER_SYMBOLS, TICKERS, TICKER_ALERT
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.json")
     if not os.path.exists(path):
         return
@@ -315,6 +353,7 @@ def _apply_watchlist_json():
                w.get("lang", "ko"), w.get("region", "국내")) for w in wl]
         if ts and tk:                    # 비어 있으면 기본값 유지(안전)
             TICKER_SYMBOLS, TICKERS = ts, tk
+            TICKER_ALERT = {w["label"]: w.get("alert", True) for w in wl}   # (R7)
     except Exception as e:
         print(f"⚠️  watchlist.json 파싱 실패({e}) — 내장 기본 관심종목 사용")
 
@@ -452,3 +491,32 @@ ALERT_EVENT_DIRECTIONS = [
     ("SHOCK", ["전쟁", "미사일", "공격", "긴급", "비상", "war", "missile", "attack",
                "strike", "emergency"]),
 ]
+
+
+# ════════════════════════════════════════════════════════════════
+# (R8) 임계값 외부화 — settings.json 이 있으면 아래 튜닝값을 덮어쓴다(코드 수정 없이 민감도 조정).
+#   파일 맨 끝에서 실행 → 다른 모듈이 `from config import ...` 하기 전에 최종값이 반영된다.
+# ════════════════════════════════════════════════════════════════
+_TUNABLE = {
+    "TICKER_MOVE_FLAG", "REVERSAL_MOVE_FLAG", "VOLUME_FLAG", "SHORT_INTEREST_FLAG",
+    "ALERT_CONFIRM_MOVE", "ALERT_MARKET_MOVE", "ALERT_VIX_SPIKE",
+    "SEMANTIC_DUP_THRESHOLD", "MEASURE_HORIZON_DAYS", "ALERT_FNG_DELTA",
+    "BB_PERIOD", "BB_K",
+}
+
+
+def _apply_settings_json():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            s = json.load(f)
+        for k, v in s.items():
+            if k in _TUNABLE and isinstance(v, (int, float)) and not isinstance(v, bool):
+                globals()[k] = v
+    except Exception as e:
+        print(f"⚠️  settings.json 파싱 실패({e}) — 내장 기본 임계값 사용")
+
+
+_apply_settings_json()

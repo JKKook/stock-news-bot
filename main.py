@@ -36,7 +36,7 @@ def main() -> None:
     # 주말(토/일)·공휴일(KST)엔 정규 브리핑 생략 — 기사는 속보(alerts.py)만 제공.
     #   FORCE_BRIEFING=1 이면 강제 발송(수동 실행·테스트용).
     if os.environ.get("FORCE_BRIEFING") != "1" and (
-            kst.weekday() >= 5 or f"{kst:%m-%d}" in config.KR_HOLIDAYS):
+            kst.weekday() >= 5 or config.is_kr_holiday(kst.date())):
         print("주말/공휴일(KST) — 정규 브리핑 생략. 속보는 alerts.py가 담당합니다.")
         return
 

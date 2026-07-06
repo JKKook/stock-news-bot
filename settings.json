@@ -1,0 +1,15 @@
+{
+  "_comment": "민감도 임계값 — 코드 수정 없이 여기서 조정(config 기본값 override). 삭제하면 기본값 사용.",
+  "TICKER_MOVE_FLAG": 5.0,
+  "REVERSAL_MOVE_FLAG": 7.0,
+  "VOLUME_FLAG": 1.5,
+  "SHORT_INTEREST_FLAG": 10.0,
+  "ALERT_CONFIRM_MOVE": 3.0,
+  "ALERT_MARKET_MOVE": 1.5,
+  "ALERT_VIX_SPIKE": 5.0,
+  "SEMANTIC_DUP_THRESHOLD": 0.8,
+  "MEASURE_HORIZON_DAYS": 7,
+  "ALERT_FNG_DELTA": 15,
+  "BB_PERIOD": 15,
+  "BB_K": 2.0
+}

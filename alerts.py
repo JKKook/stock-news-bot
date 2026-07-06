@@ -110,7 +110,7 @@ def _confirm_move(title: str) -> str:
     실제 가격 반응으로 '제목만 자극적인 가짜 속보'를 사용자가 가려낼 근거를 준다."""
     matched = {}
     for label, sym in config.TICKER_SYMBOLS.items():
-        if not sym:
+        if not sym or not config.TICKER_ALERT.get(label, True):   # (R7) 알림 off 종목 제외
             continue
         if label in title or (len(sym) >= 4 and sym in title):   # 한글명 또는 4자+ 심볼
             matched[label] = sym
