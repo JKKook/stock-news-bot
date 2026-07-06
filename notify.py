@@ -436,6 +436,25 @@ def _kr_flow_blocks(quotes: dict) -> list[list[str]]:
     return [lines]
 
 
+def _kr_market_flow_blocks(flow: dict) -> list[list[str]]:
+    """(R5) 코스피·코스닥 투자자별 순매매(개인/외국인/기관) — 국내 시장 수급·심리 지표.
+    CNN 공포탐욕(미국 편향) 보완. 정보성(매매신호 아님)."""
+    if not flow:
+        return []
+
+    def eok(v):
+        if v is None:
+            return "—"
+        return f"{v / 10000:+.1f}조" if abs(v) >= 10000 else f"{v:+,}억"
+
+    lines = ["### 🏦 국내 시장 수급 · 투자자별 순매매"]
+    for name, d in flow.items():
+        lines.append(f"- **{name}** 개인 {eok(d['personal'])} · "
+                     f"외국인 {eok(d['foreign'])} · 기관 {eok(d['institution'])}")
+    lines.append("_오늘 · 억원 · 순매수(+)/순매도(−) · 국내 수급 심리(CNN 공포탐욕 보완) · 매매신호 아님_")
+    return [lines]
+
+
 def _reversal_hits(quotes: dict) -> list:
     """되돌림 경고 대상 종목 = 급변(±REVERSAL_MOVE_FLAG%↑) + 밴드 같은 방향 과확장(상단권≥80/하단권≤20).
     [(label, q), ...] 반환. 렌더(_reversal_warnings)와 측정(measure.R1)이 같은 판정을 쓰게 공유."""
@@ -607,7 +626,7 @@ def _headline_blocks(headlines, today) -> list[list[str]]:
     return [hb]
 
 
-def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links, quotes=None, catalysts=None, summary=None, accuracy=None) -> list[str]:
+def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links, quotes=None, catalysts=None, summary=None, accuracy=None, market_flow=None) -> list[str]:
     # (P2-8 풀버전) 섹션을 투자 호라이즌 3개 층으로 묶는다 — 혼합 사용자가 '내 층'만 스캔.
     #   divider는 폰트를 키우지 않는 작은 볼드(**━━ … ━━**), _emit이 각 층을 새 메시지로 시작.
     short = (_dashboard_blocks(indices, fear_greed)      # 지금 시장 현황
@@ -616,7 +635,8 @@ def build_messages(header, today, indices, fear_greed, yahoo, headlines, market,
              + _watchlist_highlights(quotes)             # 주목(급변·밴드 극단)
              + _reversal_warnings(quotes)                # 추격 주의(선반영)
              + (accuracy or [])                          # (R1) 판정 정확도 사후검증
-             + _kr_flow_blocks(quotes)                   # 국내 수급
+             + _kr_market_flow_blocks(market_flow)       # (R5) 국내 시장 수급(개인/외국인/기관)
+             + _kr_flow_blocks(quotes)                   # 국내 종목별 수급
              + _headline_blocks(headlines, today))       # 오늘의 헤드라인
     mid = _catalyst_blocks(catalysts)                    # 예정 촉매(수일~수주)
     long = (_theme_news_blocks(sectors)                  # 테마별 소식(장기 테마)

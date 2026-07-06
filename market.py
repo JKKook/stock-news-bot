@@ -42,6 +42,27 @@ def get_indices(symbols) -> list[dict]:
 
 
 _NAVER_UA = {"User-Agent": _UA["User-Agent"], "Referer": "https://finance.naver.com/"}
+_MOBILE_UA = {"User-Agent": _UA["User-Agent"], "Referer": "https://m.stock.naver.com/"}
+
+
+def kr_market_flow() -> dict:
+    """(R5) 코스피·코스닥 투자자별 순매매(개인/외국인/기관, 억원) — 네이버 모바일 integration API.
+    CNN 공포탐욕(미국 편향)을 보완하는 국내 시장 수급·심리 지표. 무인증·무료. 실패 시 빈 dict.
+    ⚠️ 비공식 API라 형식 변경에 취약 — 값 없으면 조용히 생략(그레이스풀)."""
+    out = {}
+    for name, code in (("코스피", "KOSPI"), ("코스닥", "KOSDAQ")):
+        try:
+            r = requests.get(f"https://m.stock.naver.com/api/index/{code}/integration",
+                             headers=_MOBILE_UA, timeout=8)
+            dt = r.json().get("dealTrendInfo") or {}
+            p, f, i = (_to_int(dt.get("personalValue")), _to_int(dt.get("foreignValue")),
+                       _to_int(dt.get("institutionalValue")))
+            if any(v is not None for v in (p, f, i)):
+                out[name] = {"personal": p, "foreign": f, "institution": i,
+                             "date": dt.get("bizdate")}
+        except Exception:
+            continue
+    return out
 
 
 def _to_int(s: str):

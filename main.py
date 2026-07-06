@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 import config
 from collect import (collect, build_headlines, yahoo_headline, bloomberg_items,
                      build_source_links, dedupe_all)
-from market import get_indices, get_fear_greed, get_quotes
+from market import get_indices, get_fear_greed, get_quotes, kr_market_flow
 from catalysts import get_catalysts
 from issues import filter_issues
 from translate import translate_items, translate_text
@@ -96,9 +96,12 @@ def main() -> None:
     log_reversals(quotes)
     accuracy = score_and_report(quotes)
 
+    # (R5) 국내 시장 수급 — 코스피·코스닥 투자자별 순매매(개인/외국인/기관)
+    market_flow = kr_market_flow()
+
     messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
                               market, sectors, tickers, bloomberg, source_links, quotes,
-                              catalysts, summary, accuracy)
+                              catalysts, summary, accuracy, market_flow)
     send(messages)
 
 
