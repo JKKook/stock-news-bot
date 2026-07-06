@@ -1,8 +1,11 @@
 # 🧩 남은 고도화 백로그 (2026-07-06 기준)
 
 > P0~P3 + 2026-07-06 배치(속보 확증·세션 구분·요약 폴백·국내 수급·데이터 위생·의미 dedup·호라이즌 풀버전·watchlist 외부화)까지 완료.
+> 별도 인프라: Cloudflare Workers cron 스케줄러로 GitHub cron 지연 해결(→ [scheduling-setup.md](scheduling-setup.md)).
 > 아래는 **아직 안 한 것들** — 가치·난이도·리스크와 함께. 상세 진행분은 [research-roadmap.md](research-roadmap.md) 참고.
 > 경계 유지: **맥락·근거만 제공, 매수/매도 신호 없음.**
+>
+> _재검증(2026-07-06): R1~R9 코드베이스 대조 결과 전부 미적용 확인 — 제거된 항목 없음._
 
 ---
 
