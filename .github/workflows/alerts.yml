@@ -1,8 +1,10 @@
 name: 속보·급변 알림
 
 on:
-  schedule:
-    - cron: "*/10 * * * *"   # 10분마다 (GitHub 부하 시 지연/누락될 수 있음)
+  # 예약 트리거는 Cloudflare Worker(scheduler/)가 10분마다 workflow_dispatch로 호출.
+  #   GitHub schedule cron은 지연/누락이 잦아 제거. (docs/scheduling-setup.md)
+  # schedule:
+  #   - cron: "*/10 * * * *"
   workflow_dispatch: {}
 
 # 이전 실행과 겹치지 않게 (상태 파일 경합 방지)

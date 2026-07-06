@@ -1,11 +1,12 @@
 name: 주식 이슈 브리핑
 
 on:
-  schedule:
-    # 한국시간(KST) 오전 9시 · 오후 4시 · 오후 11시 발송
-    # UTC 기준: 00:00, 07:00, 14:00 (KST = UTC+9)
-    - cron: "0 0,7,14 * * *"
-  workflow_dispatch: {}   # 깃허브에서 수동으로 "지금 실행" 버튼도 가능
+  # 예약 트리거는 Cloudflare Worker(scheduler/)가 workflow_dispatch로 대신 호출한다.
+  #   GitHub schedule cron은 매일 수 시간 지연돼 KST 09/16/23시 정시 발송이 안 됨 → 제거.
+  #   (참고: KST 09·16·23시 = UTC 00·07·14시. docs/scheduling-setup.md)
+  # schedule:
+  #   - cron: "0 0,7,14 * * *"
+  workflow_dispatch: {}   # CF Worker 및 수동 "지금 실행" 트리거
 
 jobs:
   brief:
