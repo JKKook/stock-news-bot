@@ -1,0 +1,17 @@
+{
+  "name": "stock-news-scheduler",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker cron → GitHub workflow_dispatch (정시 트리거로 GitHub cron 지연 우회)",
+  "scripts": {
+    "login": "wrangler login",
+    "secret": "wrangler secret put GITHUB_TOKEN",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "dev": "wrangler dev --test-scheduled"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  }
+}
