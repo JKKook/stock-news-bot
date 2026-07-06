@@ -1,5 +1,9 @@
 # ⏰ 정시 스케줄링 — Cloudflare Workers Cron 설정 가이드 (상세)
 
+> ✅ **배포 완료 (2026-07-06)** — Worker `stock-news-scheduler` 배포·검증됨(cron 발화 → 즉시 dispatch 확인).
+> GitHub `schedule:` cron은 제거(컷오버)됨. 아래는 재설정·이전 시 참고용 기록.
+
+
 > **문제**: GitHub Actions 예약 cron(`schedule:`)은 best-effort라 매일 1~4시간 지연(특히 UTC 00:00).
 > **해법**: Cloudflare Worker의 정시 cron이 GitHub `workflow_dispatch` API 호출.
 > **원리**: dispatch로 트리거된 런은 **지연 없이 즉시 시작**(지연은 `schedule:` 이벤트에만 걸림).
