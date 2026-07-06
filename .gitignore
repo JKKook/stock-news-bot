@@ -6,3 +6,6 @@ venv/
 
 alert_state.json
 summary_cache.json
+node_modules/
+.wrangler/
+.dev.vars
