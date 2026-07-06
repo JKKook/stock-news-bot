@@ -1,6 +1,7 @@
 name = "stock-news-scheduler"
 main = "worker.js"
 compatibility_date = "2024-11-01"
+workers_dev = false   # cron 전용 — 공개 HTTP 라우트/서브도메인 불필요
 
 # CF cron 은 UTC 기준. worker.js 의 분기 문자열과 정확히 일치해야 함.
 #   0 0,7,14 * * *  → UTC 00·07·14시 = KST 09·16·23시  (정규 브리핑)
