@@ -15,6 +15,7 @@ from catalysts import get_catalysts
 from issues import filter_issues
 from translate import translate_items, translate_text
 from summarize import summarize
+from measure import log_reversals, score_and_report
 from notify import build_messages, send
 
 
@@ -87,8 +88,14 @@ def main() -> None:
     print("AI 요약 중...")
     summary = summarize(headlines)
 
+    # (R1) 정확도 측정 — 오늘 되돌림 신호 기록 후, 만기된 과거 신호를 오늘 가격으로 채점·리포트
+    #   (로깅 먼저 → 오늘 신호도 '검증 대기'로 즉시 집계되어 루프 작동이 바로 보임)
+    log_reversals(quotes)
+    accuracy = score_and_report(quotes)
+
     messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
-                              market, sectors, tickers, bloomberg, source_links, quotes, catalysts, summary)
+                              market, sectors, tickers, bloomberg, source_links, quotes,
+                              catalysts, summary, accuracy)
     send(messages)
 
 
