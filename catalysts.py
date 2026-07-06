@@ -32,6 +32,35 @@ def _kst_today():
     return (datetime.now(timezone.utc) + timedelta(hours=9)).date()
 
 
+def _kr_business_day(year: int, month: int, n: int):
+    """해당 월의 n번째 영업일(주말·KR_HOLIDAYS 제외). 못 찾으면 None."""
+    from datetime import date
+    d = date(year, month, 1)
+    count = 0
+    while d.month == month:
+        if d.weekday() < 5 and f"{d:%m-%d}" not in config.KR_HOLIDAYS:
+            count += 1
+            if count == n:
+                return d
+        d += timedelta(days=1)
+    return None
+
+
+def _kr_cpi_dates(today, horizon) -> list:
+    """(R3) 통계청 소비자물가동향 발표 추정일 — 매월 2번째 영업일(전월 CPI 발표).
+    today~horizon 에 걸치는 달만. 무료 발표일 API 부재를 알고리즘 패턴으로 보강(잠정)."""
+    out = []
+    y, m = today.year, today.month
+    for _ in range(4):   # 최대 4개월 앞까지
+        bd = _kr_business_day(y, m, 2)
+        if bd and today <= bd <= horizon:
+            out.append(bd)
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return out
+
+
 def economic_events() -> list[dict]:
     """앞으로 CATALYST_DAYS_AHEAD 일 내 경제지표 발표일.
     · 미국: FRED 공식 릴리스(FRED_API_KEY 있을 때).
@@ -57,10 +86,20 @@ def economic_events() -> list[dict]:
             except Exception:
                 continue
 
-    # 한국 — 큐레이션(무료 API 부재). (날짜, 라벨, 임팩트) 튜플
-    for d, label, impact in config.KR_ECONOMIC_EVENTS:
+    # 한국 — kr_calendar.json(금통위 등, confirmed 플래그) + CPI 알고리즘 계산
+    for e in config.KR_ECONOMIC_EVENTS:
+        d = e.get("date", "")
         if frm <= d <= to:
-            out.append({"date": d, "event": label, "impact": impact, "country": "KR"})
+            name = e["name"] if e.get("confirmed") else e["name"] + " (잠정)"
+            out.append({"date": d, "event": name,
+                        "impact": e.get("impact", "Medium"), "country": "KR"})
+    # CPI 추정일 보강 — 같은 달에 이미 CPI가 등록돼 있으면(확정일) 건너뜀
+    cpi_months = {o["date"][:7] for o in out if o["country"] == "KR" and "CPI" in o["event"]}
+    for bd in _kr_cpi_dates(today, horizon):
+        ds = bd.isoformat()
+        if frm <= ds <= to and ds[:7] not in cpi_months:
+            out.append({"date": ds, "event": "한국 소비자물가 CPI (잠정)",
+                        "impact": "High", "country": "KR"})
 
     # 날짜 오름차순, 같은 날은 임팩트 높은 순
     out.sort(key=lambda x: (x["date"], -_IMPACT_RANK.get(x["impact"], 0)))

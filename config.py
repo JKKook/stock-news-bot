@@ -107,19 +107,34 @@ FRED_RELEASES = [
     (9,  "미 소매판매",             "Medium"),
 ]
 
-# (D-1) 한국 경제지표 캘린더 — 큐레이션.
-#   한국은 미래 발표일을 주는 무료 API가 없어(FRED 같은 게 없음) 여기에 직접 등록한다.
-#   형식: ("YYYY-MM-DD", "라벨", "High"|"Medium"|"Low")
-#   출처(연 1회 정도 갱신): 한국은행 금통위 일정 www.bok.or.kr, 통계청 공표일정 kostat.go.kr
-#   예: ("2026-07-16", "한국 금통위(기준금리)", "High"), ("2026-08-05", "한국 소비자물가 CPI", "High")
-KR_ECONOMIC_EVENTS = [
-    # ⚠️ 아래는 '추정' 일정(정기 발표 패턴 기반). 라벨의 '(추정)'은 실제 확인 후 제거.
-    #    금통위는 연 8회(대개 목요일), CPI는 매월 초 발표.
-    ("2026-07-16", "한국 금통위 기준금리(추정)", "High"),
-    ("2026-08-04", "한국 소비자물가 CPI(추정)",   "High"),
-    ("2026-08-27", "한국 금통위 기준금리(추정)", "High"),
-    ("2026-09-02", "한국 소비자물가 CPI(추정)",   "High"),
+# (R3) 한국 경제지표 캘린더.
+#   한국은 미래 발표일 무료 API가 없어 직접 등록(금통위 등 비정기) + CPI는 catalysts가 알고리즘 계산.
+#   dict 형식: {"date","name","impact","confirmed"}. confirmed=False면 렌더에 '(잠정)' 표기.
+#   공식 발표일 확정 시 kr_calendar.json 에서 confirmed=true 로 바꾸면 '(잠정)'이 사라진다.
+#   출처(연 1회 갱신): 한국은행 금통위 일정 www.bok.or.kr, 통계청 공표일정 kostat.go.kr
+KR_ECONOMIC_EVENTS = [   # 아래는 폴백 기본값 — 실제 편집은 kr_calendar.json 에서.
+    {"date": "2026-07-16", "name": "한국 금통위 기준금리", "impact": "High", "confirmed": False},
+    {"date": "2026-08-27", "name": "한국 금통위 기준금리", "impact": "High", "confirmed": False},
 ]
+
+
+def _apply_kr_calendar_json():
+    """kr_calendar.json 이 있으면 한국 경제 캘린더를 그걸로 대체(공식 발표일 유지관리용)."""
+    global KR_ECONOMIC_EVENTS
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kr_calendar.json")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        events = [e for e in data if e.get("date") and e.get("name")]
+        if events:
+            KR_ECONOMIC_EVENTS = events
+    except Exception as e:
+        print(f"⚠️  kr_calendar.json 파싱 실패({e}) — 내장 기본 캘린더 사용")
+
+
+_apply_kr_calendar_json()
 
 # ── 블록별 기사 개수 ────────────────────────────────────────────
 HEADLINE_PER_REGION = 5  # 1) 헤드라인 — 국내/해외 각각 몇 개씩
