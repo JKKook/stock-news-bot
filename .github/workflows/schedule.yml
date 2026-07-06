@@ -18,6 +18,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      # (R1) 정확도 측정 로그를 실행 간 이어받기 — 롤링 키 패턴(alert_state와 동일)
+      - uses: actions/cache@v4
+        with:
+          path: prediction_log.json
+          key: prediction-log-${{ github.run_id }}
+          restore-keys: |
+            prediction-log-
+
       - run: pip install -r requirements.txt
 
       - run: python main.py

@@ -9,3 +9,4 @@ summary_cache.json
 node_modules/
 .wrangler/
 .dev.vars
+prediction_log.json
