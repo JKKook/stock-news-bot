@@ -45,6 +45,20 @@ _NAVER_UA = {"User-Agent": _UA["User-Agent"], "Referer": "https://finance.naver.
 _MOBILE_UA = {"User-Agent": _UA["User-Agent"], "Referer": "https://m.stock.naver.com/"}
 
 
+def get_kr_futures():
+    """(R6) 코스피200 선물 — 네이버 모바일. 야간 세션(18:00~익일 05:00)엔 야간선물 시세를 반영하므로
+    나스닥선물과 함께 '밤사이 국내 방향성'을 본다(특히 KST 23시 브리핑). 실패 시 None.
+    반환 형식은 get_indices 항목과 동일({name,flag,price,chg})."""
+    try:
+        d = requests.get("https://m.stock.naver.com/api/index/FUT/basic",
+                         headers=_MOBILE_UA, timeout=8).json()
+        price = float(str(d.get("closePrice", "")).replace(",", ""))
+        chg = float(str(d.get("fluctuationsRatio", "")).replace(",", ""))
+        return {"name": "코스피200선물", "flag": "🇰🇷", "price": price, "chg": chg}
+    except Exception:
+        return None
+
+
 def kr_market_flow() -> dict:
     """(R5) 코스피·코스닥 투자자별 순매매(개인/외국인/기관, 억원) — 네이버 모바일 integration API.
     CNN 공포탐욕(미국 편향)을 보완하는 국내 시장 수급·심리 지표. 무인증·무료. 실패 시 빈 dict.

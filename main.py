@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 import config
 from collect import (collect, build_headlines, yahoo_headline, bloomberg_items,
                      build_source_links, dedupe_all)
-from market import get_indices, get_fear_greed, get_quotes, kr_market_flow
+from market import get_indices, get_fear_greed, get_quotes, kr_market_flow, get_kr_futures
 from catalysts import get_catalysts
 from issues import filter_issues
 from translate import translate_items, translate_text
@@ -42,6 +42,11 @@ def main() -> None:
 
     print("시세·뉴스 수집 중...")
     indices = get_indices(config.INDICES)
+    # (R6) 코스피200 선물(야간 세션 반영)을 코스닥 뒤에 끼워 대시보드에 표시
+    kf = get_kr_futures()
+    if kf:
+        pos = next((i for i, x in enumerate(indices) if x["name"] == "코스닥"), len(indices) - 1)
+        indices.insert(pos + 1, kf)
     fear_greed = get_fear_greed()
     yahoo = yahoo_headline()
     market = collect(config.MARKET_QUERIES, config.MAX_MARKET)
