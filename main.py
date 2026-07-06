@@ -74,11 +74,14 @@ def main() -> None:
 
     # 번역된 제목 기준으로 브리핑 전체 중복 기사 제거(같은 사건 한 번만)
     dedupe_all(market, sectors, tickers, bloomberg)
+    # (R4) 의미 dedup을 렌더 섹션(관심종목·테마 뉴스)까지 확대 — 토큰이 못 잡은 근접중복 제거
+    #      우선순위: 관심종목 > 테마(앞선 것을 대표로 남김)
+    from semantic import keep_indices, dedupe_groups
+    dedupe_groups([tickers, sectors])
 
     # 헤드라인 + Source 링크: (번역된) 기사를 지역별 최신순으로
     headlines = build_headlines(pool, config.HEADLINE_PER_REGION, config.HEADLINE_MAX_LEN)
     # (P4-2) 의미 기반 근접 중복 제거 — 토큰 dedup이 못 잡은 '다른 표현·같은 사건'을 임베딩으로
-    from semantic import keep_indices
     for region, lst in headlines.items():
         keep = keep_indices(lst)
         headlines[region] = [t for i, t in enumerate(lst) if i in keep]

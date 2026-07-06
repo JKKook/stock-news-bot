@@ -52,3 +52,24 @@ def keep_indices(titles: list[str], threshold: float | None = None) -> set:
         keep.append(i)
         kept.append(emb)
     return set(keep)
+
+
+def dedupe_groups(group_lists: list, threshold: float | None = None) -> None:
+    """(R4) 여러 그룹리스트([{items:[{title,...}]}])의 기사를 의미 유사도로 교차 중복 제거(제자리).
+    앞선 group_list(우선순위 높음)의 기사를 대표로 남긴다 — 한 번의 임베딩 호출로 전체 처리.
+    키 없음/실패 시 무효과(토큰 dedup 결과 유지)."""
+    refs, titles = [], []
+    for glist in group_lists:
+        for g in glist:
+            for it in g.get("items", []):
+                refs.append(it)
+                titles.append(it.get("title", ""))
+    if len(titles) < 2:
+        return
+    keep = keep_indices(titles, threshold)
+    drop = {id(refs[i]) for i in range(len(refs)) if i not in keep}
+    if not drop:
+        return
+    for glist in group_lists:
+        for g in glist:
+            g["items"] = [it for it in g.get("items", []) if id(it) not in drop]
