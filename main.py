@@ -17,7 +17,8 @@ from issues import filter_issues
 from translate import translate_items, translate_text
 from summarize import summarize, market_context
 from measure import log_reversals, score_and_report
-from notify import build_messages, send
+from movers import get_movers
+from notify import build_messages, build_market_note, send
 
 
 def _flatten_sectors():
@@ -146,16 +147,23 @@ def main() -> None:
 
     # 🧭 so-what 요약 + 🧠 한 줄 총평 — 헤드라인 + 오늘의 시장 데이터를 근거로 (키 없으면 None)
     print("AI 요약 중...")
-    summary = summarize(headlines, market_context(indices, fear_greed, market_flow, quotes))
+    summary = summarize(headlines, market_context(indices, fear_greed, market_flow, quotes, region))
 
     # (R1) 정확도 측정 — 오늘 되돌림 신호 기록 후, 만기된 과거 신호를 오늘 가격으로 채점·리포트
     #   (로깅 먼저 → 오늘 신호도 '검증 대기'로 즉시 집계되어 루프 작동이 바로 보임)
     log_reversals(quotes)
     accuracy = score_and_report(quotes)
 
-    messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
-                              market, sectors, tickers, bloomberg, source_links, quotes,
-                              catalysts, summary, accuracy, market_flow)
+    if region:
+        # 📑 마켓 뷰 / 마켓 클로징 — 시장 리서치 노트(정규 브리핑과 중복 없음)
+        print("시장 급등·급락 종목 수집 중...")
+        movers = get_movers(region)
+        messages = build_market_note(header, region, indices, summary, movers, catalysts)
+    else:
+        # 📰 정규 브리핑 — 관심종목·테마 중심 종합본
+        messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
+                                  market, sectors, tickers, bloomberg, source_links, quotes,
+                                  catalysts, summary, accuracy, market_flow)
     send(messages)
 
 

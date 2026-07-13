@@ -42,7 +42,12 @@ _SYSTEM = (
     "verdict는 '한 줄 총평'이다 — 아래 '오늘의 시장 데이터'(지수·수급·공포탐욕·급변 종목)와 헤드라인을 "
     "종합해 **오늘이 어떤 시장인지를 딱 한 문장**으로 규정한다. "
     "수치를 나열하지 말고 시장의 '성격'을 짚어라(예: 위험회피, 관망, 순환매, 테마 쏠림, 저가매수 유입, "
-    "외국인 이탈 속 개인 방어 등). 주가 예측·매매 판단은 절대 금지. 데이터가 빈약하면 '방향성 판단 이른 장세'라고 적어라."
+    "외국인 이탈 속 개인 방어 등). 주가 예측·매매 판단은 절대 금지. 데이터가 빈약하면 '방향성 판단 이른 장세'라고 적어라. "
+    # (리서치 노트 Summary) 핵심 이슈 불릿
+    "key_points는 오늘 시장의 '핵심 이슈' 2~3개다 — 수급(외국인·기관·개인), 환율·금리, 매크로 지표, "
+    "지정학/정책 등 **지수 등락 외의 굵직한 사실**을 각 한 줄로. 반드시 주어진 헤드라인·시장 데이터에 "
+    "근거해야 하며 지어내지 마라. 종목 개별 등락은 넣지 마라(별도 섹션에서 다룬다). "
+    "형식 예: '외국인 8거래일째 순매도..달러/원 1,550원 재돌파'. 근거가 없으면 빈 배열."
 )
 
 # Gemini responseSchema (Type enum은 대문자)
@@ -54,9 +59,10 @@ _SCHEMA = {
         "watch": {"type": "STRING"},
         "affected": {"type": "STRING"},
         "verdict": {"type": "STRING"},     # 한 줄 총평 — 오늘이 어떤 시장인지
+        "key_points": {"type": "ARRAY", "items": {"type": "STRING"}},  # 핵심 이슈 2~3개
     },
-    "required": ["what_changed", "why_matters", "watch", "affected", "verdict"],
-    "propertyOrdering": ["what_changed", "why_matters", "watch", "affected", "verdict"],
+    "required": ["what_changed", "why_matters", "watch", "affected", "verdict", "key_points"],
+    "propertyOrdering": ["what_changed", "why_matters", "watch", "affected", "verdict", "key_points"],
 }
 
 _FIELDS = ("what_changed", "why_matters", "watch", "affected", "verdict")
@@ -77,6 +83,10 @@ def _guard(summary: dict | None) -> dict | None:
         return summary
     cleaned = {}
     for k, v in summary.items():
+        if isinstance(v, list):                      # key_points — 항목별로 검사
+            cleaned[k] = [x for x in v
+                          if not any(p in x for p in _ADVICE_PATTERNS)]
+            continue
         hit = next((p for p in _ADVICE_PATTERNS if p in v), None)
         if hit:
             print(f"⚠️  요약 가드: '{k}'에서 조언성 표현('{hit}') 감지 → 해당 항목 제외")
@@ -133,8 +143,8 @@ def _call_model(model: str, body: dict) -> dict | None:
     parts = r.json()["candidates"][0]["content"]["parts"]
     text = "".join(p.get("text", "") for p in parts)
     data = json.loads(text)
-    out = {k: (data.get(k) or "").strip()
-           for k in _FIELDS}
+    out = {k: (data.get(k) or "").strip() for k in _FIELDS}
+    out["key_points"] = [str(x).strip() for x in (data.get("key_points") or []) if str(x).strip()]
     return out if any(out.values()) else None
 
 
@@ -145,12 +155,16 @@ def _watchlist_context() -> str:
     return f"관심 섹터: {sectors}\n관심 종목: {tickers}"
 
 
-def market_context(indices, fear_greed, market_flow, quotes) -> str:
+def market_context(indices, fear_greed, market_flow, quotes, region=None) -> str:
     """(한 줄 총평용) 오늘의 시장 데이터를 프롬프트 텍스트로 — 지수·공포탐욕·국내수급·급변 종목.
-    verdict가 '어떤 시장인지'를 헤드라인뿐 아니라 실제 수치에 근거해 규정하도록 한다."""
+    region이 주어지면 그 시장 지수만 넘긴다(나스닥 브리핑인데 코스피 얘기를 하지 않도록).
+    선물(야간)은 밤사이 방향성 맥락이라 항상 포함."""
     parts = []
     if indices:
-        parts.append("지수: " + ", ".join(f"{i['name']} {i['chg']:+.1f}%" for i in indices[:8]))
+        want = {"국내": ("코스피", "코스닥"), "해외": ("나스닥", "S&P500", "다우")}.get(region)
+        picked = [i for i in indices
+                  if (want is None or i["name"] in want or "선물" in i["name"] or i["name"] == "VIX")]
+        parts.append("지수: " + ", ".join(f"{i['name']} {i['chg']:+.1f}%" for i in picked[:8]))
     if fear_greed and fear_greed.get("score") is not None:
         parts.append(f"공포탐욕지수: {fear_greed['score']:.0f}/100 ({fear_greed.get('rating','')})")
     if market_flow:

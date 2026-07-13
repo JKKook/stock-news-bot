@@ -261,7 +261,7 @@ def _catalyst_blocks(catalysts: dict) -> list[list[str]]:
     if not econ and not earn:
         return []
 
-    body = ["### 📅 예정 촉매"]  # 호라이즌은 상위 🟡 중기 divider가 표시
+    body = ["### ▶ 주목할 이벤트 (한국시각)"]
     if econ:
         body.append("**경제지표**")
         for e in econ:
@@ -569,17 +569,28 @@ def _bloomberg_blocks(items: list[dict]) -> list[list[str]]:
     return out
 
 
-def _glossary_blocks() -> list[list[str]]:
-    """하단 용어 주석 — 판단 줄에 쓰인 어려운 용어 설명."""
-    return [[
-        "### 📖 용어 (참고)",
-        "**Trailing PER**: 최근 12개월 *실제* 이익 기준(주가 ÷ 지난 1년 EPS). 확정 실적.",
-        "**Forward PER**: 향후 12개월 *예상* 이익 기준. Forward < Trailing → 이익성장 기대, 반대 → 이익감소 우려.",
-        "**EPS**: 주당순이익(순이익 ÷ 주식 수).",
-        "**BB %B (볼린저)**: 15일 이동평균 ±2×표준편차 밴드에서 현재가 위치(하단 0 · 중심 50 · 상단 100).",
-        "**52주 위치**: 최근 1년 저가~고가 구간에서 현재가의 백분위.",
-        "**공매도 %**: 유통주식 대비 공매도 잔량 비율(높을수록 하락 베팅 큼). ↑ 전월 대비 증가 · ↓ 감소.",
-    ]]
+# 용어 사전 — (본문에서 찾을 키워드, 표시 이름, 설명). 실제 등장한 것만 렌더한다.
+_GLOSSARY = [
+    ("Trailing PER", "Trailing PER", "최근 12개월 *실제* 이익 기준(주가 ÷ 지난 1년 EPS). 확정 실적."),
+    ("Forward PER", "Forward PER", "향후 12개월 *예상* 이익 기준. Forward < Trailing → 이익성장 기대."),
+    ("BB", "BB %B (볼린저)", "15일 이동평균 ±2×표준편차 밴드에서 현재가 위치(하단 0 · 중심 50 · 상단 100)."),
+    ("52주", "52주 위치", "최근 1년 저가~고가 구간에서 현재가의 백분위."),
+    ("공매도", "공매도 %", "유통주식 대비 공매도 잔량 비율(높을수록 하락 베팅 큼)."),
+    ("야간선물", "야간선물", "정규장 마감 후 밤사이 거래 — 다음날 방향성 참고."),
+    ("공포탐욕", "공포탐욕지수", "CNN Fear & Greed — 0(극단 공포)~100(극단 탐욕) 시장 심리."),
+    ("순매매", "순매수/순매도", "산 금액 − 판 금액. (+)면 순매수, (−)면 순매도."),
+    ("잠정", "(잠정)", "공식 발표일이 확정되지 않은 추정 일정."),
+    ("추격 주의", "추격 주의", "급변이 이미 가격에 반영됐을 수 있어 되돌림 위험 — 정보성 경고(매매신호 아님)."),
+]
+
+
+def _glossary_blocks(rendered: str) -> list[list[str]]:
+    """📖 용어 — 이번 브리핑 본문에 '실제로 등장한' 용어만(고정 목록 아님).
+    브리핑 종류(정규/마켓뷰/마켓클로징)마다 쓰이는 지표가 달라 내용에 맞춰 자동 조정된다."""
+    hits = [(name, desc) for kw, name, desc in _GLOSSARY if kw in rendered]
+    if not hits:
+        return []
+    return [["### 📖 용어 (참고)"] + [f"**{n}**: {d}" for n, d in hits]]
 
 
 def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[list[str]]:
@@ -613,6 +624,42 @@ def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[lis
     return blocks
 
 
+def _note_index_lines(indices, region) -> list[str]:
+    """리서치 노트 Summary의 지수 줄 — '코스피 8,320.79(-73.86p, -0.88%)' 형식(포인트+%)."""
+    want = ("코스피", "코스닥") if region == "국내" else ("나스닥", "S&P500", "다우")
+    picked = [i for i in (indices or []) if i["name"] in want]
+    if not picked:
+        return []
+    parts = []
+    for i in picked:
+        pt = i.get("chg_pt")
+        ptxt = f"{pt:+,.2f}p, " if pt is not None else ""
+        parts.append(f"{i['name']} {i['price']:,.2f}({ptxt}{i['chg']:+.2f}%)")
+    lines = ["✔ " + " · ".join(parts)]
+    fut = [i for i in (indices or []) if "야간선물" in i["name"]]
+    if fut:   # 밤사이 선물 흐름(개장 전 방향성 참고)
+        lines.append("✔ 밤사이 " + " · ".join(f"{i['name']} {i['chg']:+.2f}%" for i in fut))
+    return lines
+
+
+def _movers_blocks(movers) -> list[list[str]]:
+    """▶ Up & Down — 시장이 주목한 급등·급락 종목(관심종목 아님). UP/DOWN 영역 분리."""
+    if not movers or not (movers.get("up") or movers.get("down")):
+        return []
+    b = ["### ▶ Up & Down  _(시장 주요 급등·급락)_"]
+    for side, emoji, label in (("up", "📈", "UP"), ("down", "📉", "DOWN")):
+        rows = movers.get(side) or []
+        if not rows:
+            continue
+        if len(b) > 1:
+            b.append("")
+        b.append(f"**{emoji} {label}**")
+        for m in rows:
+            reason = (m.get("reason") or "").strip()
+            b.append(f"· **{m['name']}** {m['chg']:+.2f}%" + (f" — {reason}" if reason else ""))
+    return [b]
+
+
 def _verdict_blocks(summary) -> list[list[str]]:
     """🧠 한 줄 총평 — 오늘이 '어떤 시장'인지 한 문장으로(브리핑 최하단).
     지수·수급·공포탐욕·급변종목 + 헤드라인을 근거로 AI가 규정. 매매신호 아님."""
@@ -637,41 +684,67 @@ def _headline_blocks(headlines, today) -> list[list[str]]:
     return [hb]
 
 
-def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links, quotes=None, catalysts=None, summary=None, accuracy=None, market_flow=None) -> list[str]:
-    # (P2-8 풀버전) 섹션을 투자 호라이즌 3개 층으로 묶는다 — 혼합 사용자가 '내 층'만 스캔.
-    #   divider는 폰트를 키우지 않는 작은 볼드(**━━ … ━━**), _emit이 각 층을 새 메시지로 시작.
-    # 리서치 노트 3부 구성 (미래에셋 '마켓 뷰/마켓 클로징' 형식 참고)
-    #   ▶ Summary      — 지수·수급·공포탐욕 + AI 3줄 + 핵심 헤드라인 (오늘 무슨 일)
-    #   ▶ Up & Down    — 종목·테마가 얼마나·왜 움직였나 (수치 + 뉴스)
-    #   ▶ 주목할 이벤트 — 앞으로의 일정(경제지표·실적)
-    summary_sec = (_dashboard_blocks(indices, fear_greed)   # 지수 + 공포탐욕
-                   + _kr_market_flow_blocks(market_flow)    # (R5) 시장 수급(개인/외국인/기관)
-                   + _summary_blocks(summary)               # AI 3줄(so-what)
-                   + _headline_blocks(headlines, today))    # 핵심 헤드라인
-    updown_sec = (_watchlist_table_blocks(quotes)           # 관심종목 수치(등락·BB·PER)
-                  + _watchlist_highlights(quotes)           # 주목(급변·밴드 극단)
-                  + _reversal_warnings(quotes)              # 추격 주의(선반영)
-                  + (accuracy or [])                        # (R1) 판정 정확도
-                  + _kr_flow_blocks(quotes)                 # 종목별 외국인·기관 수급
-                  + _theme_news_blocks(sectors)             # 테마가 왜 움직였나
-                  + _watchlist_news_blocks(tickers, quotes))  # 종목이 왜 움직였나
-    events_sec = _catalyst_blocks(catalysts)                # 예정 경제지표·실적
+def _finish(blocks) -> list[str]:
+    """공통 마무리 — 본문에 실제 등장한 용어만 주석 + 면책 + 구분선."""
+    rendered = "\n".join("\n".join(b) for b in blocks)
+    blocks += _glossary_blocks(rendered)     # 내용에 따라 동적
+    blocks.append([DISCLAIMER])              # (P0-3) 매수/매도 신호 아님
+    blocks.append([SEPARATOR])
+    return _emit(blocks)
 
-    blocks = [[SEPARATOR, header]]  # 맨 앞 구분선
+
+def build_market_note(header, region, indices, summary, movers, catalysts) -> list[str]:
+    """📑 마켓 뷰 / 마켓 클로징 — 시장 리서치 노트(정규 브리핑과 중복 없이 '시장'만).
+      ▶ Summary      지수(포인트+%) · 한 줄 총평 · 핵심 이슈(수급·환율·매크로)
+      ▶ Up & Down    시장이 주목한 급등·급락 종목(관심종목 아님) + 왜 움직였나
+      ▶ 주목할 이벤트 앞으로의 경제지표·실적
+    관심종목 지표·테마 뉴스·헤드라인 등은 정규 브리핑 담당 → 여기선 넣지 않는다."""
+    blocks = [[SEPARATOR, header]]
+
+    s = ["### ▶ Summary"] + _note_index_lines(indices, region)
+    v = (summary or {}).get("verdict", "").strip()
+    if v:
+        s.append(f"✔ **{v}**")
+    for kp in ((summary or {}).get("key_points") or [])[:3]:
+        s.append(f"✔ {kp}")
+    if len(s) > 1:
+        blocks.append(s)
+
+    blocks += _movers_blocks(movers)      # ▶ Up & Down (UP/DOWN 분리)
+    blocks += _catalyst_blocks(catalysts)  # ▶ 주목할 이벤트
+    return _finish(blocks)
+
+
+def build_messages(header, today, indices, fear_greed, yahoo, headlines, market, sectors, tickers, bloomberg, source_links, quotes=None, catalysts=None, summary=None, accuracy=None, market_flow=None) -> list[str]:
+    """📰 정규 브리핑 — 관심종목·테마 중심의 종합본(마켓 뷰/클로징과 내용이 겹치지 않게 구성).
+      ▶ Summary   지수 대시보드 · 공포탐욕 · 시장수급 · AI 3줄 · 헤드라인
+      ▶ Up & Down 관심종목 지표(BB·PER)·추격주의·정확도·종목별 수급 · 테마/종목 뉴스
+      ▶ 주목할 이벤트 경제지표·실적
+    """
+    summary_sec = (_dashboard_blocks(indices, fear_greed)
+                   + _kr_market_flow_blocks(market_flow)
+                   + _summary_blocks(summary)
+                   + _headline_blocks(headlines, today))
+    updown_sec = (_watchlist_table_blocks(quotes)
+                  + _watchlist_highlights(quotes)
+                  + _reversal_warnings(quotes)
+                  + (accuracy or [])
+                  + _kr_flow_blocks(quotes)
+                  + _theme_news_blocks(sectors)
+                  + _watchlist_news_blocks(tickers, quotes))
+    events_sec = _catalyst_blocks(catalysts)
+
+    blocks = [[SEPARATOR, header]]
     if summary_sec:
         blocks += [["**━━ ▶ Summary ━━**"]] + summary_sec
     if updown_sec:
-        blocks += [["**━━ ▶ Up & Down ━━**"]] + updown_sec
+        blocks += [["**━━ ▶ Up & Down (관심종목·테마) ━━**"]] + updown_sec
     if events_sec:
         blocks += [["**━━ ▶ 주목할 이벤트 (한국시각) ━━**"]] + events_sec
 
-    # 부록(호라이즌 밖) — Source 링크 · 용어 · 한 줄 총평 · 면책
     blocks += _source_blocks(source_links)
-    blocks += _glossary_blocks()  # 용어 주석
-    blocks += _verdict_blocks(summary)   # 🧠 한 줄 총평 — 최하단(오늘이 어떤 시장인지)
-    blocks.append([DISCLAIMER])  # (P0-3) 면책 — 매수/매도 신호 아님
-    blocks.append([SEPARATOR])   # 맨 뒤 구분선
-    return _emit(blocks)
+    blocks += _verdict_blocks(summary)   # 🧠 한 줄 총평 — 정규 브리핑은 최하단
+    return _finish(blocks)
 
 
 def send(messages: list[str]) -> None:
