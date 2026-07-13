@@ -207,6 +207,8 @@ def _dashboard_blocks(indices, fear_greed) -> list[list[str]]:
         b = ["### 📊 주요 지수 시세"]
         for ix in indices:
             b.append(f"{ix['flag']} **{ix['name']}**  {ix['price']:,.2f}  {_fmt_chg(ix['chg'])}")
+        if any("야간선물" in ix["name"] for ix in indices):
+            b.append("_야간선물 = 정규장 마감 후 밤사이 거래(다음날 방향성 참고) · 그 외는 현물 지수_")
         blocks.append(b)
 
     if fear_greed and fear_greed.get("score") is not None:

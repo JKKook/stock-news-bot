@@ -10,7 +10,8 @@ from datetime import datetime, timezone, timedelta
 import config
 from collect import (collect, build_headlines, yahoo_headline, bloomberg_items,
                      build_source_links, dedupe_all)
-from market import get_indices, get_fear_greed, get_quotes, kr_market_flow, get_kr_futures
+from market import (get_indices, get_fear_greed, get_quotes, kr_market_flow,
+                    get_kr_futures, label_futures)
 from catalysts import get_catalysts
 from issues import filter_issues
 from translate import translate_items, translate_text
@@ -47,6 +48,8 @@ def main() -> None:
     if kf:
         pos = next((i for i, x in enumerate(indices) if x["name"] == "코스닥"), len(indices) - 1)
         indices.insert(pos + 1, kf)
+    # 선물은 세션에 따라 '○○ 야간선물' / '○○ 선물(정규장)'로 표기 — 현물 지수와 확실히 구분
+    label_futures(indices, kst)
     fear_greed = get_fear_greed()
     yahoo = yahoo_headline()
     market = collect(config.MARKET_QUERIES, config.MAX_MARKET)

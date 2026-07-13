@@ -16,7 +16,7 @@ import feedparser
 import config
 from collect import _clean_title, _published, _source, _EPOCH
 from events import fingerprint, headline
-from market import get_indices, get_fear_greed, get_quotes
+from market import get_indices, get_fear_greed, get_quotes, index_session
 from notify import _fg_zone, send
 from translate import translate_text
 
@@ -44,19 +44,7 @@ def save_state(s: dict) -> None:
         json.dump(s, f, ensure_ascii=False)
 
 
-def _index_session(name: str, kst: datetime) -> str:
-    """지수 급변이 어느 세션에서 났는지 KST 시간 기준으로 판정(현물은 정규장에만 움직임).
-    · 국내(코스피·코스닥): 평일 09:00~15:30 = '정규장', 그 외 = '장마감(종가)'
-    · 미국 현물(나스닥·S&P·다우): 미 정규장(KST 약 22:30~06:00) = '정규장', 그 외 = '장마감(종가)'
-    · 선물(나스닥선물 등, 거의 24h): 미 정규장 시간 = '정규장', 그 외 = '야간선물'
-    한국 투자자가 '지금 이게 야선인지 정규장인지'를 즉시 알 수 있게 한다."""
-    wd, hm = kst.weekday(), kst.hour * 60 + kst.minute
-    us_regular = (hm >= 22 * 60 + 30) or (hm <= 6 * 60)   # KST로 환산한 미 정규장(서머타임 근사)
-    if "선물" in name:
-        return "정규장" if us_regular else "야간선물"
-    if name in ("코스피", "코스닥"):
-        return "정규장" if (wd < 5 and 9 * 60 <= hm <= 15 * 60 + 30) else "장마감(종가)"
-    return "정규장" if us_regular else "장마감(종가)"   # 미국 현물 지수
+# 세션 판정(정규장/야간선물/장마감)은 market.index_session 공유 — 브리핑 대시보드와 동일 기준.
 
 
 # ── 1) 지수 급변 ────────────────────────────────────────────────
@@ -75,7 +63,7 @@ def check_indices(state: dict, today: str, indices: list[dict], kst: datetime) -
             bands[ix["name"]] = crossed
             direction = "급락 🔻" if chg < 0 else "급등 🔺"
             level = "⚠️ 서킷브레이커/사이드카 수준" if crossed >= 8 else "큰 변동"
-            session = _index_session(ix["name"], kst)   # 정규장 / 야간선물 / 장마감
+            session = index_session(ix["name"], kst)   # 정규장 / 야간선물 / 장마감
             alerts.append(
                 f"{ix['flag']} **{ix['name']} {direction} {chg:+.2f}%** · ⏰{session} ({crossed}%↑ 돌파, {level})\n"
                 f"현재 {ix['price']:,.2f} (전일 종가 대비)"
@@ -167,10 +155,10 @@ def _market_confirm(title: str, indices: list) -> str:
     return ("\n" + " · ".join(parts)) if parts else ""
 
 
-def _is_weekend_kst(kst: datetime) -> bool:
-    """토·일(KST)이면 True — 국내·미국장 모두 휴장이라 지수 급등락 속보가 의미 없다.
-    (한국 공휴일은 제외: 그날도 미국장은 열릴 수 있어 지수 알림을 살려둔다.)"""
-    return kst.weekday() >= 5
+def _is_market_closed_kst(kst: datetime) -> bool:
+    """토·일 또는 한국 공휴일(KST)이면 True — 이때는 지수 급등락 속보를 보내지 않고
+    전쟁·지정학 / 심각한 경제 충격 기사만 발송한다(config.ALERT_WEEKEND_ONLY)."""
+    return kst.weekday() >= 5 or config.is_kr_holiday(kst.date())
 
 
 def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
@@ -289,14 +277,14 @@ def main() -> None:
     except Exception:
         indices = []
 
-    # (주말 모드) 토·일(KST)엔 장이 닫혀 지수 급변·공포탐욕 알림을 끄고,
+    # (휴장 모드) 토·일·공휴일(KST)엔 지수 급변·공포탐욕 알림을 끄고,
     #   속보는 전쟁·지정학 / 심각한 경제 충격 기사만 보낸다.
-    weekend = _is_weekend_kst(kst)
+    closed = _is_market_closed_kst(kst)
     alerts = []
-    if not weekend:
+    if not closed:
         alerts += check_indices(state, today, indices, kst)
         alerts += check_fng(state)
-    alerts += check_news(state, indices, weekend=weekend)
+    alerts += check_news(state, indices, weekend=closed)
 
     save_state(state)
 

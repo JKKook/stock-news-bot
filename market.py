@@ -45,6 +45,43 @@ _NAVER_UA = {"User-Agent": _UA["User-Agent"], "Referer": "https://finance.naver.
 _MOBILE_UA = {"User-Agent": _UA["User-Agent"], "Referer": "https://m.stock.naver.com/"}
 
 
+def index_session(name: str, kst) -> str:
+    """지수·선물이 지금 어느 세션인지(KST 기준) — '정규장' / '야간선물' / '장마감(종가)'.
+    · 국내 선물(코스피200): 주간 09:00~15:45 = 정규장, 18:00~익일 05:00 = 야간선물
+    · 해외 선물(나스닥): 미 정규장(KST 약 22:30~06:00) = 정규장, 그 외 = 야간선물
+    · 국내 현물(코스피·코스닥): 평일 09:00~15:30 = 정규장, 그 외 = 장마감(종가)
+    · 해외 현물(나스닥·S&P·다우): 미 정규장 = 정규장, 그 외 = 장마감(종가)
+    현물은 정규장에만 움직이므로 '야간선물'과 라벨이 겹치지 않는다."""
+    wd, hm = kst.weekday(), kst.hour * 60 + kst.minute
+    us_regular = (hm >= 22 * 60 + 30) or (hm <= 6 * 60)   # KST로 환산한 미 정규장(근사)
+    if "코스피200" in name:                                  # 국내 선물
+        if 9 * 60 <= hm <= 15 * 60 + 45:
+            return "정규장"
+        if hm >= 18 * 60 or hm <= 5 * 60:
+            return "야간선물"
+        return "장마감(종가)"
+    if "선물" in name:                                       # 해외 선물(나스닥 등)
+        return "정규장" if us_regular else "야간선물"
+    if name in ("코스피", "코스닥"):                          # 국내 현물
+        return "정규장" if (wd < 5 and 9 * 60 <= hm <= 15 * 60 + 30) else "장마감(종가)"
+    return "정규장" if us_regular else "장마감(종가)"          # 해외 현물
+
+
+def label_futures(indices: list, kst) -> None:
+    """(표기) 선물 항목 이름을 세션에 맞춰 '○○ 야간선물' / '○○ 선물(정규장)'로 바꾼다(제자리).
+    현물 지수(나스닥·코스피)와 헷갈리지 않도록 '야간선물'을 워딩으로 못박는다."""
+    for ix in indices:
+        name = ix.get("name", "")
+        if "선물" not in name:
+            continue
+        base = name.replace("선물", "").strip()          # '나스닥', '코스피200'
+        sess = index_session(name, kst)
+        if sess == "야간선물":
+            ix["name"] = f"{base} 야간선물"
+        else:
+            ix["name"] = f"{base} 선물({'정규장' if sess == '정규장' else '장마감'})"
+
+
 def get_kr_futures():
     """(R6) 코스피200 선물 — 네이버 모바일. 야간 세션(18:00~익일 05:00)엔 야간선물 시세를 반영하므로
     나스닥선물과 함께 '밤사이 국내 방향성'을 본다(특히 KST 23시 브리핑). 실패 시 None.
