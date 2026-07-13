@@ -2,11 +2,20 @@ name: 주식 이슈 브리핑
 
 on:
   # 예약 트리거는 Cloudflare Worker(scheduler/)가 workflow_dispatch로 대신 호출한다.
-  #   GitHub schedule cron은 매일 수 시간 지연돼 KST 09/16/23시 정시 발송이 안 됨 → 제거.
-  #   (참고: KST 09·16·23시 = UTC 00·07·14시. docs/scheduling-setup.md)
-  # schedule:
-  #   - cron: "0 0,7,14 * * *"
-  workflow_dispatch: {}   # CF Worker 및 수동 "지금 실행" 트리거
+  #   GitHub schedule cron은 매일 수 시간 지연돼 정시 발송이 안 됨 → 제거. (docs/scheduling-setup.md)
+  #   시장 개장/마감 시각에 맞춰 focus(KR|US) + kind(view|closing)를 넘겨 '해당 시장 리서치 노트'를 보낸다.
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: "브리핑 대상 시장 — KR(코스피/코스닥) | US(나스닥) | 빈값(전체)"
+        required: false
+        default: ""
+        type: string
+      kind:
+        description: "브리핑 종류 — view(개장 전 마켓뷰) | closing(마감 후 마켓클로징) | 빈값"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   brief:
@@ -34,3 +43,6 @@ jobs:
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # 시장별 리서치 노트 — CF Worker가 개장/마감 시각에 맞춰 넘긴다(빈값이면 전체 브리핑)
+          BRIEF_FOCUS: ${{ inputs.focus }}
+          BRIEF_KIND: ${{ inputs.kind }}
