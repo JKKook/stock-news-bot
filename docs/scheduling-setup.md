@@ -3,6 +3,28 @@
 > ✅ **배포 완료 (2026-07-06)** — Worker `stock-news-scheduler` 배포·검증됨(cron 발화 → 즉시 dispatch 확인).
 > GitHub `schedule:` cron은 제거(컷오버)됨. 아래는 재설정·이전 시 참고용 기록.
 
+## 📅 발송 스케줄 (2026-07-13 개편 — 시장 개장/마감 기준)
+
+브리핑은 **해당 시장 섹션만** 담은 리서치 노트로 발송된다(`focus`=KR|US, `kind`=view|closing).
+
+| 시각 | 내용 | dispatch inputs | cron(UTC) |
+|---|---|---|---|
+| **KST 08:30** | 📑 [마켓 뷰] 코스피·코스닥 개장 전 | `focus=KR, kind=view` | `30 23 * * *` |
+| **KST 16:30** | 📑 [마켓 클로징] 코스피·코스닥 마감 | `focus=KR, kind=closing` | `30 7 * * *` |
+| **ET 09:30** | 📑 [마켓 뷰] 나스닥 개장 | `focus=US, kind=view` | `30 13,14 * * *` |
+| **ET 16:10** | 📑 [마켓 클로징] 나스닥 마감 | `focus=US, kind=closing` | `10 20,21 * * *` |
+| 10분마다 | 속보·급변 감시 | — | `*/10 * * * *` |
+
+### ⏰ 서머타임(DST) 자동 대응
+미국장 시각은 EDT/EST에 따라 UTC 기준이 1시간 밀린다. 그래서 **두 후보 시각 모두에 cron을 걸어두고,
+Worker가 `Intl`(America/New_York)로 계산한 **실제 뉴욕 현지시각이 목표(09:30 / 16:10)와 일치할 때만 발송**한다.
+- 여름(EDT): UTC 13:30 → ET 09:30 ✅ 발송 / UTC 14:30 → ET 10:30 ⏭️ 건너뜀
+- 겨울(EST): UTC 13:30 → ET 08:30 ⏭️ 건너뜀 / UTC 14:30 → ET 09:30 ✅ 발송
+
+### 휴장일 처리
+- 국내 브리핑: KST 주말·공휴일(음력 포함)엔 생략
+- 미국 브리핑: **ET 기준 주말**엔 생략(`main.py`가 `zoneinfo`로 판정 — 서머타임 자동)
+
 
 > **문제**: GitHub Actions 예약 cron(`schedule:`)은 best-effort라 매일 1~4시간 지연(특히 UTC 00:00).
 > **해법**: Cloudflare Worker의 정시 cron이 GitHub `workflow_dispatch` API 호출.
