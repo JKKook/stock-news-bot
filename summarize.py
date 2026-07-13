@@ -181,7 +181,27 @@ def market_context(indices, fear_greed, market_flow, quotes, region=None) -> str
     return "오늘의 시장 데이터:\n" + "\n".join(f"- {p}" for p in parts) if parts else ""
 
 
-def summarize(headlines: dict, market_ctx: str = "") -> dict | None:
+# 브리핑 종류별 논조 — 마켓 뷰는 '전망', 마켓 클로징은 '분석'
+_KIND_TONE = {
+    "view": (
+        "\n\n[브리핑 종류: 마켓 뷰 — 개장 전]\n"
+        "verdict와 key_points는 **전망·관전 포인트** 중심으로 쓴다. "
+        "밤사이 해외 지수·야간선물 흐름, 수급, 예정 이벤트를 근거로 "
+        "'오늘 장을 어떻게 볼 것인가 / 무엇이 변수인가'를 짚어라. "
+        "verdict는 '~로 출발할 가능성', '~가 관건인 장' 같은 전망형 한 문장. "
+        "단, 지수·주가의 구체적 수치 예측과 매매 판단은 절대 금지 — 관전 포인트로만."
+    ),
+    "closing": (
+        "\n\n[브리핑 종류: 마켓 클로징 — 마감 후]\n"
+        "verdict와 key_points는 **원인 분석** 중심으로 쓴다. "
+        "지수 등락·투자자별 수급·급등락 종목을 근거로 "
+        "'오늘 시장이 왜 이렇게 움직였나 / 그 의미는 무엇인가'를 짚어라. "
+        "verdict는 '~때문에 ~한 장세였다' 같은 분석형 한 문장. 매매 판단은 금지."
+    ),
+}
+
+
+def summarize(headlines: dict, market_ctx: str = "", kind: str = "") -> dict | None:
     """{'국내':[제목...], '해외':[제목...]} → 요약 dict(한 줄 총평 verdict 포함) 또는 None.
     market_ctx(시장 데이터 텍스트)를 주면 verdict가 실제 수치에 근거해 생성된다."""
     if not _KEY:
@@ -198,7 +218,8 @@ def summarize(headlines: dict, market_ctx: str = "") -> dict | None:
         lines += ["[해외]"] + [f"- {t}" for t in en]
     prompt = ("오늘의 헤드라인:\n" + "\n".join(lines)
               + (f"\n\n{market_ctx}" if market_ctx else "")
-              + "\n\n" + _watchlist_context())
+              + "\n\n" + _watchlist_context()
+              + _KIND_TONE.get(kind, ""))   # 마켓 뷰=전망 / 마켓 클로징=분석
 
     body = {
         "system_instruction": {"parts": [{"text": _SYSTEM}]},

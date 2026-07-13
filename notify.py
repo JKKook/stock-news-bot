@@ -660,13 +660,15 @@ def _movers_blocks(movers) -> list[list[str]]:
     return [b]
 
 
-def _verdict_blocks(summary) -> list[list[str]]:
-    """🧠 한 줄 총평 — 오늘이 '어떤 시장'인지 한 문장으로(브리핑 최하단).
-    지수·수급·공포탐욕·급변종목 + 헤드라인을 근거로 AI가 규정. 매매신호 아님."""
+def _verdict_blocks(summary, kind: str = "") -> list[list[str]]:
+    """한 줄 총평 — 지수·수급·급변종목 + 헤드라인을 근거로 AI가 한 문장으로 규정. 매매신호 아님.
+    · 마켓 뷰(개장 전)  → 🔭 한 줄 전망 (오늘 장을 어떻게 볼 것인가)
+    · 마켓 클로징(마감 후) → 🧠 한 줄 총평 (오늘 왜 이렇게 움직였나)"""
     v = (summary or {}).get("verdict", "").strip()
     if not v:
         return []
-    return [["### 🧠 한 줄 총평", f"> {v}"]]
+    title = "### 🔭 한 줄 전망" if kind == "view" else "### 🧠 한 줄 총평"
+    return [[title, f"> {v}"]]
 
 
 def _headline_blocks(headlines, today) -> list[list[str]]:
@@ -693,7 +695,7 @@ def _finish(blocks) -> list[str]:
     return _emit(blocks)
 
 
-def build_market_note(header, region, indices, summary, movers, catalysts) -> list[str]:
+def build_market_note(header, region, indices, summary, movers, catalysts, kind: str = "") -> list[str]:
     """📑 마켓 뷰 / 마켓 클로징 — 시장 리서치 노트(정규 브리핑과 중복 없이 '시장'만).
       ▶ Summary      지수(포인트+%) · 한 줄 총평 · 핵심 이슈(수급·환율·매크로)
       ▶ Up & Down    시장이 주목한 급등·급락 종목(관심종목 아님) + 왜 움직였나
@@ -701,10 +703,9 @@ def build_market_note(header, region, indices, summary, movers, catalysts) -> li
     관심종목 지표·테마 뉴스·헤드라인 등은 정규 브리핑 담당 → 여기선 넣지 않는다."""
     blocks = [[SEPARATOR, header]]
 
+    blocks += _verdict_blocks(summary, kind)   # 전망(view)/총평(closing) — Summary 위
+
     s = ["### ▶ Summary"] + _note_index_lines(indices, region)
-    v = (summary or {}).get("verdict", "").strip()
-    if v:
-        s.append(f"✔ **{v}**")
     for kp in ((summary or {}).get("key_points") or [])[:3]:
         s.append(f"✔ {kp}")
     if len(s) > 1:
