@@ -167,7 +167,13 @@ def _market_confirm(title: str, indices: list) -> str:
     return ("\n" + " · ".join(parts)) if parts else ""
 
 
-def check_news(state: dict, indices: list) -> list[str]:
+def _is_weekend_kst(kst: datetime) -> bool:
+    """토·일(KST)이면 True — 국내·미국장 모두 휴장이라 지수 급등락 속보가 의미 없다.
+    (한국 공휴일은 제외: 그날도 미국장은 열릴 수 있어 지수 알림을 살려둔다.)"""
+    return kst.weekday() >= 5
+
+
+def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
     sent = set(state.get("sent", []))
     events = dict(state.get("events", {}))   # 사건 지문 → 마지막 알림 시각(ISO)
     now = datetime.now(timezone.utc)
@@ -194,6 +200,9 @@ def check_news(state: dict, indices: list) -> list[str]:
             if not any(k in low for k in kw):                     # 속보 키워드 게이트
                 continue
             if any(x in title for x in config.ALERT_NEWS_EXCLUDE): # L2: 회고·컬럼
+                continue
+            # (주말 모드) 토·일엔 지수 급등락 기사는 빼고 전쟁·심각한 경제 충격만 통과
+            if weekend and not any(k.lower() in low for k in config.ALERT_WEEKEND_ONLY):
                 continue
             candidates.append({
                 "sev": _severity(low), "pub": pub, "title": title, "lang": lang,
@@ -280,10 +289,14 @@ def main() -> None:
     except Exception:
         indices = []
 
+    # (주말 모드) 토·일(KST)엔 장이 닫혀 지수 급변·공포탐욕 알림을 끄고,
+    #   속보는 전쟁·지정학 / 심각한 경제 충격 기사만 보낸다.
+    weekend = _is_weekend_kst(kst)
     alerts = []
-    alerts += check_indices(state, today, indices, kst)
-    alerts += check_fng(state)
-    alerts += check_news(state, indices)
+    if not weekend:
+        alerts += check_indices(state, today, indices, kst)
+        alerts += check_fng(state)
+    alerts += check_news(state, indices, weekend=weekend)
 
     save_state(state)
 
