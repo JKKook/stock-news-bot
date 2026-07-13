@@ -35,6 +35,7 @@ def get_indices(symbols) -> list[dict]:
                 "flag": flag,
                 "price": price,
                 "chg": (price - prev) / prev * 100,
+                "chg_pt": price - prev,     # 포인트 변화(리서치 노트 Summary 표기용)
             })
         except Exception:
             continue
