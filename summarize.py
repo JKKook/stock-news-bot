@@ -37,7 +37,12 @@ _SYSTEM = (
     # (P1-6) 사건 → 관심 섹터/종목 연결
     "affected에는 오늘 헤드라인이 '관심 섹터/종목' 목록 중 무엇과 직접 연결되는지만 적는다. "
     "헤드라인에 근거가 명확할 때만 고르고, 근거 없으면 빈 문자열로 둔다. "
-    "형식 예: '반도체(SK하이닉스·한미반도체), AI 인프라'. 없으면 ''."
+    "형식 예: '반도체(SK하이닉스·한미반도체), AI 인프라'. 없으면 ''. "
+    # (한 줄 총평) 오늘이 '어떤 시장'인지 규정
+    "verdict는 '한 줄 총평'이다 — 아래 '오늘의 시장 데이터'(지수·수급·공포탐욕·급변 종목)와 헤드라인을 "
+    "종합해 **오늘이 어떤 시장인지를 딱 한 문장**으로 규정한다. "
+    "수치를 나열하지 말고 시장의 '성격'을 짚어라(예: 위험회피, 관망, 순환매, 테마 쏠림, 저가매수 유입, "
+    "외국인 이탈 속 개인 방어 등). 주가 예측·매매 판단은 절대 금지. 데이터가 빈약하면 '방향성 판단 이른 장세'라고 적어라."
 )
 
 # Gemini responseSchema (Type enum은 대문자)
@@ -48,10 +53,13 @@ _SCHEMA = {
         "why_matters": {"type": "STRING"},
         "watch": {"type": "STRING"},
         "affected": {"type": "STRING"},
+        "verdict": {"type": "STRING"},     # 한 줄 총평 — 오늘이 어떤 시장인지
     },
-    "required": ["what_changed", "why_matters", "watch", "affected"],
-    "propertyOrdering": ["what_changed", "why_matters", "watch", "affected"],
+    "required": ["what_changed", "why_matters", "watch", "affected", "verdict"],
+    "propertyOrdering": ["what_changed", "why_matters", "watch", "affected", "verdict"],
 }
+
+_FIELDS = ("what_changed", "why_matters", "watch", "affected", "verdict")
 
 
 # (D-5) 조언성 표현 denylist — 프롬프트 가드가 뚫렸을 때의 안전망.
@@ -126,7 +134,7 @@ def _call_model(model: str, body: dict) -> dict | None:
     text = "".join(p.get("text", "") for p in parts)
     data = json.loads(text)
     out = {k: (data.get(k) or "").strip()
-           for k in ("what_changed", "why_matters", "watch", "affected")}
+           for k in _FIELDS}
     return out if any(out.values()) else None
 
 
@@ -137,8 +145,31 @@ def _watchlist_context() -> str:
     return f"관심 섹터: {sectors}\n관심 종목: {tickers}"
 
 
-def summarize(headlines: dict) -> dict | None:
-    """{'국내':[제목...], '해외':[제목...]} → {'what_changed','why_matters','watch'} 또는 None."""
+def market_context(indices, fear_greed, market_flow, quotes) -> str:
+    """(한 줄 총평용) 오늘의 시장 데이터를 프롬프트 텍스트로 — 지수·공포탐욕·국내수급·급변 종목.
+    verdict가 '어떤 시장인지'를 헤드라인뿐 아니라 실제 수치에 근거해 규정하도록 한다."""
+    parts = []
+    if indices:
+        parts.append("지수: " + ", ".join(f"{i['name']} {i['chg']:+.1f}%" for i in indices[:8]))
+    if fear_greed and fear_greed.get("score") is not None:
+        parts.append(f"공포탐욕지수: {fear_greed['score']:.0f}/100 ({fear_greed.get('rating','')})")
+    if market_flow:
+        for name, d in market_flow.items():
+            def eok(v):
+                return "—" if v is None else (f"{v/10000:+.1f}조" if abs(v) >= 10000 else f"{v:+,}억")
+            parts.append(f"{name} 수급: 개인 {eok(d['personal'])} / 외국인 {eok(d['foreign'])}"
+                         f" / 기관 {eok(d['institution'])}")
+    if quotes:
+        movers = sorted(quotes.items(), key=lambda kv: -abs(kv[1].get("chg", 0)))[:5]
+        movers = [f"{k} {v['chg']:+.1f}%" for k, v in movers if abs(v.get("chg", 0)) >= 3]
+        if movers:
+            parts.append("급변 관심종목: " + ", ".join(movers))
+    return "오늘의 시장 데이터:\n" + "\n".join(f"- {p}" for p in parts) if parts else ""
+
+
+def summarize(headlines: dict, market_ctx: str = "") -> dict | None:
+    """{'국내':[제목...], '해외':[제목...]} → 요약 dict(한 줄 총평 verdict 포함) 또는 None.
+    market_ctx(시장 데이터 텍스트)를 주면 verdict가 실제 수치에 근거해 생성된다."""
     if not _KEY:
         return None
     ko = headlines.get("국내") or []
@@ -152,6 +183,7 @@ def summarize(headlines: dict) -> dict | None:
     if en:
         lines += ["[해외]"] + [f"- {t}" for t in en]
     prompt = ("오늘의 헤드라인:\n" + "\n".join(lines)
+              + (f"\n\n{market_ctx}" if market_ctx else "")
               + "\n\n" + _watchlist_context())
 
     body = {

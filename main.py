@@ -15,7 +15,7 @@ from market import (get_indices, get_fear_greed, get_quotes, kr_market_flow,
 from catalysts import get_catalysts
 from issues import filter_issues
 from translate import translate_items, translate_text
-from summarize import summarize
+from summarize import summarize, market_context
 from measure import log_reversals, score_and_report
 from notify import build_messages, send
 
@@ -29,17 +29,56 @@ def _flatten_sectors():
     return queries
 
 
+# 리서치 노트 헤더 — (focus, kind) → 제목 (미래에셋 '마켓 뷰/마켓 클로징' 형식 참고)
+_TITLES = {
+    ("KR", "view"):    "📑 **[마켓 뷰] 코스피·코스닥 개장 전**",
+    ("KR", "closing"): "📑 **[마켓 클로징] 코스피·코스닥 마감**",
+    ("US", "view"):    "📑 **[마켓 뷰] 나스닥 개장**",
+    ("US", "closing"): "📑 **[마켓 클로징] 나스닥 마감**",
+}
+
+
+def _focus_filter(region, sectors, tickers, headlines, quotes, catalysts, market_flow):
+    """(시장별 브리핑) 해당 시장 섹션만 남긴다 — 뉴스·테마·관심종목·촉매·수급.
+    지수 대시보드는 필터하지 않는다(밤사이 미국 흐름이 국내 개장 방향을 좌우하므로 맥락 필수)."""
+    reg_of = {lbl: r for lbl, _, _, r in config.TICKERS}
+    sectors = [g for g in sectors if g.get("region") == region]
+    tickers = [g for g in tickers if g.get("region") == region]
+    headlines = {region: headlines.get(region, [])}
+    quotes = {k: v for k, v in (quotes or {}).items() if reg_of.get(k) == region}
+    if catalysts:
+        cc = "KR" if region == "국내" else "US"
+        catalysts = {
+            "economic": [e for e in catalysts.get("economic", []) if e.get("country") == cc],
+            "earnings": [e for e in catalysts.get("earnings", []) if reg_of.get(e["name"]) == region],
+        }
+    if region == "해외":
+        market_flow = {}        # 국내 수급은 국내 브리핑에만
+    return sectors, tickers, headlines, quotes, catalysts, market_flow
+
+
 def main() -> None:
     kst = datetime.now(timezone.utc) + timedelta(hours=9)
     today = f"{kst:%Y-%m-%d}"
-    header = f"📰 **주식 이슈 브리핑** — {kst:%Y-%m-%d %H:%M} (KST)"
+    # 시장별 브리핑 모드 — BRIEF_FOCUS=KR|US(없으면 전체), BRIEF_KIND=view|closing
+    focus = (os.environ.get("BRIEF_FOCUS") or "").upper()
+    kind = (os.environ.get("BRIEF_KIND") or "").lower()
+    region = {"KR": "국내", "US": "해외"}.get(focus)
+    title = _TITLES.get((focus, kind), "📰 **주식 이슈 브리핑**")
+    header = f"{title} — {kst:%Y-%m-%d %H:%M} (KST)"
 
-    # 주말(토/일)·공휴일(KST)엔 정규 브리핑 생략 — 기사는 속보(alerts.py)만 제공.
+    # 휴장일엔 생략 — 국내 브리핑은 KST 주말·공휴일, 미국 브리핑은 ET 주말 기준(서머타임 자동).
     #   FORCE_BRIEFING=1 이면 강제 발송(수동 실행·테스트용).
-    if os.environ.get("FORCE_BRIEFING") != "1" and (
-            kst.weekday() >= 5 or config.is_kr_holiday(kst.date())):
-        print("주말/공휴일(KST) — 정규 브리핑 생략. 속보는 alerts.py가 담당합니다.")
-        return
+    if os.environ.get("FORCE_BRIEFING") != "1":
+        if focus == "US":
+            from zoneinfo import ZoneInfo
+            et = datetime.now(ZoneInfo("America/New_York"))
+            if et.weekday() >= 5:
+                print("미국 휴장(ET 주말) — 나스닥 브리핑 생략.")
+                return
+        elif kst.weekday() >= 5 or config.is_kr_holiday(kst.date()):
+            print("주말/공휴일(KST) — 정규 브리핑 생략. 속보는 alerts.py가 담당합니다.")
+            return
 
     print("시세·뉴스 수집 중...")
     indices = get_indices(config.INDICES)
@@ -90,22 +129,29 @@ def main() -> None:
     # 헤드라인 + Source 링크: (번역된) 기사를 지역별 최신순으로
     headlines = build_headlines(pool, config.HEADLINE_PER_REGION, config.HEADLINE_MAX_LEN)
     # (P4-2) 의미 기반 근접 중복 제거 — 토큰 dedup이 못 잡은 '다른 표현·같은 사건'을 임베딩으로
-    for region, lst in headlines.items():
+    for _rg, lst in headlines.items():          # ⚠️ region(포커스 변수)과 이름 겹치지 않게
         keep = keep_indices(lst)
-        headlines[region] = [t for i, t in enumerate(lst) if i in keep]
+        headlines[_rg] = [t for i, t in enumerate(lst) if i in keep]
     source_links = build_source_links(pool, config.SOURCE_PER_REGION)
 
-    # 🧭 so-what 요약 — 품질 필터된 헤드라인만 Claude에 넘겨 3줄 종합 (키 없으면 None)
+    # (R5) 국내 시장 수급 — 코스피·코스닥 투자자별 순매매(개인/외국인/기관)
+    #   한 줄 총평(verdict)의 근거로도 쓰이므로 요약보다 먼저 조회한다.
+    market_flow = kr_market_flow()
+
+    # (시장별 브리핑) 해당 시장 섹션만 남긴다 — 요약·총평도 필터된 내용 기준으로 생성
+    if region:
+        sectors, tickers, headlines, quotes, catalysts, market_flow = _focus_filter(
+            region, sectors, tickers, headlines, quotes, catalysts, market_flow)
+        print(f"시장별 브리핑: {region} ({kind or 'regular'})")
+
+    # 🧭 so-what 요약 + 🧠 한 줄 총평 — 헤드라인 + 오늘의 시장 데이터를 근거로 (키 없으면 None)
     print("AI 요약 중...")
-    summary = summarize(headlines)
+    summary = summarize(headlines, market_context(indices, fear_greed, market_flow, quotes))
 
     # (R1) 정확도 측정 — 오늘 되돌림 신호 기록 후, 만기된 과거 신호를 오늘 가격으로 채점·리포트
     #   (로깅 먼저 → 오늘 신호도 '검증 대기'로 즉시 집계되어 루프 작동이 바로 보임)
     log_reversals(quotes)
     accuracy = score_and_report(quotes)
-
-    # (R5) 국내 시장 수급 — 코스피·코스닥 투자자별 순매매(개인/외국인/기관)
-    market_flow = kr_market_flow()
 
     messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
                               market, sectors, tickers, bloomberg, source_links, quotes,
