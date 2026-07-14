@@ -37,6 +37,18 @@ def _bb_label(pct: float) -> str:
     return f"BB {pct:.0f}%"
 
 
+def _bb_icon(pct) -> str:
+    """볼린저 밴드 극단 아이콘 — 상단권(≥80) 🔺 / 하단권(≤20) 🔻 / 중심권은 없음.
+    표(monospace)에서 폭이 깨지지 않도록 east_asian_width='W'(2칸 고정) 이모지만 쓴다."""
+    if pct is None:
+        return ""
+    if pct >= 80:
+        return "🔺"
+    if pct <= 20:
+        return "🔻"
+    return ""
+
+
 def _bb_zone(pct: float) -> str:
     """볼린저 %B → 밴드 내 위치 서술(과매도/과열 같은 신호어 대신 위치어 사용)."""
     if pct > 100:
@@ -162,16 +174,17 @@ def _watchlist_table_blocks(quotes: dict) -> list[list[str]]:
             continue
         rows = [("종목", "가격", "등락", "BB", "PER")]
         for label, d in groups[region]:
-            # 해외는 티커 심볼(좁고 인식됨)·USD, 국내는 한글명 10폭 컷·천원
+            # 해외는 티커 심볼(좁고 인식됨)·USD, 국내는 한글명 8폭 컷·천원
             if region == "해외":
                 name, price = (TICKER_SYMBOLS.get(label) or label), _compact_price(d["price"])
             else:
-                name, price = _cap_width(label, 10), _price_kwon(d["price"])
+                name, price = _cap_width(label, 8), _price_kwon(d["price"])
+            name += _bb_icon(d.get("bb_pct"))     # 밴드 상단🔺/하단🔻 한눈에
             bb = f"{d['bb_pct']:.0f}" if d.get("bb_pct") is not None else "-"
             rows.append((name, price, f"{d['chg']:+.1f}%", bb, _per_num(d)))
         body.append(f"**{flag} {region}**")
         body += _one_table(rows)
-    body.append("_국내 가격=천원 · 해외=$ · BB=볼린저%B(중심50) · PER=Trailing_")
+    body.append("_🔺밴드 상단권(≥80) · 🔻하단권(≤20) · 국내 가격=천원 · 해외=$ · PER=Trailing_")
     return [body] if len(body) > 2 else []
 
 
