@@ -47,7 +47,11 @@ _SYSTEM = (
     "key_points는 오늘 시장의 '핵심 이슈' 2~3개다 — 수급(외국인·기관·개인), 환율·금리, 매크로 지표, "
     "지정학/정책 등 **지수 등락 외의 굵직한 사실**을 각 한 줄로. 반드시 주어진 헤드라인·시장 데이터에 "
     "근거해야 하며 지어내지 마라. 종목 개별 등락은 넣지 마라(별도 섹션에서 다룬다). "
-    "형식 예: '외국인 8거래일째 순매도..달러/원 1,550원 재돌파'. 근거가 없으면 빈 배열."
+    "형식 예: '외국인 8거래일째 순매도..달러/원 1,550원 재돌파'. 근거가 없으면 빈 배열. "
+    # (AI 기사 요약) 최상단 서술형 문단
+    "news_digest는 '오늘의 기사 요약'이다 — 주어진 헤드라인들을 종합해 **2~3문장의 자연스러운 서술형 문단**으로 "
+    "요약한다(불릿 금지, 이어지는 문장으로). 오늘 시장을 움직인 핵심 사건과 그 함의를 기자처럼 담담하게 서술하라. "
+    "헤드라인에 없는 사실·수치는 절대 지어내지 마라. 주가 예측·매매 판단 금지."
 )
 
 # Gemini responseSchema (Type enum은 대문자)
@@ -60,12 +64,15 @@ _SCHEMA = {
         "affected": {"type": "STRING"},
         "verdict": {"type": "STRING"},     # 한 줄 총평 — 오늘이 어떤 시장인지
         "key_points": {"type": "ARRAY", "items": {"type": "STRING"}},  # 핵심 이슈 2~3개
+        "news_digest": {"type": "STRING"},   # AI 기사 요약 — 서술형 2~3문장
     },
-    "required": ["what_changed", "why_matters", "watch", "affected", "verdict", "key_points"],
-    "propertyOrdering": ["what_changed", "why_matters", "watch", "affected", "verdict", "key_points"],
+    "required": ["what_changed", "why_matters", "watch", "affected", "verdict",
+                 "key_points", "news_digest"],
+    "propertyOrdering": ["news_digest", "verdict", "key_points",
+                         "what_changed", "why_matters", "watch", "affected"],
 }
 
-_FIELDS = ("what_changed", "why_matters", "watch", "affected", "verdict")
+_FIELDS = ("what_changed", "why_matters", "watch", "affected", "verdict", "news_digest")
 
 
 # (D-5) 조언성 표현 denylist — 프롬프트 가드가 뚫렸을 때의 안전망.

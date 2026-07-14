@@ -660,6 +660,18 @@ def _movers_blocks(movers) -> list[list[str]]:
     return [b]
 
 
+def _digest_blocks(summary, sources=None) -> list[list[str]]:
+    """📰 AI 기사 요약 — 오늘 헤드라인을 종합한 서술형 2~3문장(최상단).
+    본문은 일반 폰트, 출처는 디스코드 subtext(-#)로 작게. 헤드라인 근거만(환각 방지)."""
+    d = (summary or {}).get("news_digest", "").strip()
+    if not d:
+        return []
+    b = ["### 📰 AI 기사 요약", d]
+    if sources:
+        b.append("-# 참고: " + " · ".join(sources))
+    return [b]
+
+
 def _verdict_blocks(summary, kind: str = "") -> list[list[str]]:
     """한 줄 총평 — 지수·수급·급변종목 + 헤드라인을 근거로 AI가 한 문장으로 규정. 매매신호 아님.
     · 마켓 뷰(개장 전)  → 🔭 한 줄 전망 (오늘 장을 어떻게 볼 것인가)
@@ -695,7 +707,7 @@ def _finish(blocks) -> list[str]:
     return _emit(blocks)
 
 
-def build_market_note(header, region, indices, summary, movers, catalysts, kind: str = "") -> list[str]:
+def build_market_note(header, region, indices, summary, movers, catalysts, kind: str = "", sources=None) -> list[str]:
     """📑 마켓 뷰 / 마켓 클로징 — 시장 리서치 노트(정규 브리핑과 중복 없이 '시장'만).
       ▶ Summary      지수(포인트+%) · 한 줄 총평 · 핵심 이슈(수급·환율·매크로)
       ▶ Up & Down    시장이 주목한 급등·급락 종목(관심종목 아님) + 왜 움직였나
@@ -703,6 +715,7 @@ def build_market_note(header, region, indices, summary, movers, catalysts, kind:
     관심종목 지표·테마 뉴스·헤드라인 등은 정규 브리핑 담당 → 여기선 넣지 않는다."""
     blocks = [[SEPARATOR, header]]
 
+    blocks += _digest_blocks(summary, sources)  # 📰 AI 기사 요약 — 최상단(서술형 + 출처)
     blocks += _verdict_blocks(summary, kind)   # 전망(view)/총평(closing) — Summary 위
 
     s = ["### ▶ Summary"] + _note_index_lines(indices, region)

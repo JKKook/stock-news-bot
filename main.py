@@ -58,6 +58,29 @@ def _focus_filter(region, sectors, tickers, headlines, quotes, catalysts, market
     return sectors, tickers, headlines, quotes, catalysts, market_flow
 
 
+_DOMAIN_SRC = __import__("re").compile(r"^[\w.-]+\.(net|com|kr|org|io|co\.kr)$", __import__("re").I)
+
+
+def _headline_sources(headlines, pool, limit: int = 3) -> list[str]:
+    """AI 기사 요약의 '참고' 출처 — 헤드라인으로 쓰인 기사들의 언론사(중복 제거 상위 N).
+    실제 기사에서 뽑으므로 출처를 지어내지 않는다.
+    구글뉴스가 언론사명 대신 도메인(v.daum.net 등)을 주는 경우는 제외한다."""
+    out = []
+    for lst in headlines.values():
+        for h in lst:
+            base = h.rstrip("…").strip()[:20]
+            if not base:
+                continue
+            for it in pool:
+                src = (it.get("source") or "").strip()
+                if not src or _DOMAIN_SRC.match(src):   # 도메인 표기는 출처로 부적합
+                    continue
+                if it.get("title", "").startswith(base) and src not in out:
+                    out.append(src)
+                    break
+    return out[:limit]
+
+
 def main() -> None:
     kst = datetime.now(timezone.utc) + timedelta(hours=9)
     today = f"{kst:%Y-%m-%d}"
@@ -158,7 +181,9 @@ def main() -> None:
         # 📑 마켓 뷰 / 마켓 클로징 — 시장 리서치 노트(정규 브리핑과 중복 없음)
         print("시장 급등·급락 종목 수집 중...")
         movers = get_movers(region)
-        messages = build_market_note(header, region, indices, summary, movers, catalysts, kind)
+        sources = _headline_sources(headlines, pool)   # AI 기사 요약의 '참고' 출처
+        messages = build_market_note(header, region, indices, summary, movers,
+                                     catalysts, kind, sources)
     else:
         # 📰 정규 브리핑 — 관심종목·테마 중심 종합본
         messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
