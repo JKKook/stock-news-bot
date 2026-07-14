@@ -715,17 +715,17 @@ def build_market_note(header, region, indices, summary, movers, catalysts, kind:
     관심종목 지표·테마 뉴스·헤드라인 등은 정규 브리핑 담당 → 여기선 넣지 않는다."""
     blocks = [[SEPARATOR, header]]
 
-    blocks += _digest_blocks(summary, sources)  # 📰 AI 기사 요약 — 최상단(서술형 + 출처)
-    blocks += _verdict_blocks(summary, kind)   # 전망(view)/총평(closing) — Summary 위
+    blocks += _digest_blocks(summary, sources)   # ① 📰 AI 기사 요약 — 가장 먼저
 
-    s = ["### ▶ Summary"] + _note_index_lines(indices, region)
+    s = ["### ▶ Summary"] + _note_index_lines(indices, region)   # ② 지수 + 핵심 이슈
     for kp in ((summary or {}).get("key_points") or [])[:3]:
         s.append(f"✔ {kp}")
     if len(s) > 1:
         blocks.append(s)
 
-    blocks += _movers_blocks(movers)      # ▶ Up & Down (UP/DOWN 분리)
-    blocks += _catalyst_blocks(catalysts)  # ▶ 주목할 이벤트
+    blocks += _movers_blocks(movers)        # ③ ▶ Up & Down (시장 주요 급등·급락)
+    blocks += _catalyst_blocks(catalysts)   # ④ ▶ 주목할 이벤트
+    blocks += _verdict_blocks(summary, kind)  # ⑤ 전망(view)/총평(closing) — 마지막에 결론
     return _finish(blocks)
 
 
