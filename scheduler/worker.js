@@ -65,31 +65,30 @@ export default {
       return;
     }
 
-    // 국내 — KST 08:30(UTC 23:30) 개장 전 / KST 16:30(UTC 07:30) 마감 후
-    if (cron === "30 7,23 * * *") {
-      const kind = now.getUTCHours() === 23 ? "view" : "closing";
-      ctx.waitUntil(dispatch(BRIEFING_WF, env, { focus: "KR", kind }));
+    // KST 고정 — UTC 01:00 = KST 10:00 [🇰🇷 마켓 뷰]  (코스피 개장 1h 후 관망)
+    //             UTC 23:00 = KST 08:00 [🇺🇸 마켓 클로징] (코스피 개장 전, 밤새 나스닥 분석)
+    if (cron === "0 1,23 * * *") {
+      const inputs = now.getUTCHours() === 1
+        ? { focus: "KR", kind: "view" }
+        : { focus: "US", kind: "closing" };
+      ctx.waitUntil(dispatch(BRIEFING_WF, env, inputs));
       return;
     }
 
-    // 미국 — 나스닥 개장 09:30 ET (EDT=UTC13:30 / EST=UTC14:30 → 실제 ET로 판별)
-    if (cron === "30 13,14 * * *") {
+    // KST 16:30 (UTC 07:30) — [🇰🇷 마켓 클로징] 코스피 마감 후
+    if (cron === "30 7 * * *") {
+      ctx.waitUntil(dispatch(BRIEFING_WF, env, { focus: "KR", kind: "closing" }));
+      return;
+    }
+
+    // [🇺🇸 마켓 뷰] 나스닥 개장 1시간 후 = ET 10:30 (EDT=UTC14:30 / EST=UTC15:30)
+    //   두 후보 모두에 cron을 걸고, 실제 뉴욕 시각이 10:30일 때만 발송(서머타임 자동).
+    if (cron === "30 14,15 * * *") {
       const et = etNow(now);
-      if (et.h === 9 && et.m === 30) {
+      if (et.h === 10 && et.m === 30) {
         ctx.waitUntil(dispatch(BRIEFING_WF, env, { focus: "US", kind: "view" }));
       } else {
-        console.log(`⏭️  나스닥 개장 아님(ET ${et.h}:${et.m}) — 서머타임 보정으로 건너뜀`);
-      }
-      return;
-    }
-
-    // 미국 — 나스닥 마감 후 16:10 ET (EDT=UTC20:10 / EST=UTC21:10)
-    if (cron === "10 20,21 * * *") {
-      const et = etNow(now);
-      if (et.h === 16 && et.m === 10) {
-        ctx.waitUntil(dispatch(BRIEFING_WF, env, { focus: "US", kind: "closing" }));
-      } else {
-        console.log(`⏭️  나스닥 마감 아님(ET ${et.h}:${et.m}) — 서머타임 보정으로 건너뜀`);
+        console.log(`⏭️  나스닥 개장 1h 후 아님(ET ${et.h}:${et.m}) — 서머타임 보정으로 건너뜀`);
       }
       return;
     }
