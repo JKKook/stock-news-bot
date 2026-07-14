@@ -17,18 +17,64 @@ _UA = {
 _CNN = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 
 
+# 국내 지수는 네이버(한국거래소 공식 시세)를 쓴다 — 야후는 국내지수 데이터가 부정확하다.
+#   실측(2026-07-14): 야후 ^KQ11 previousClose 가 '2거래일 전' 값(837.43)이라 등락률을 -10.4%로
+#   과대계산(실제 -5.3%). 실시간 가격도 야후 750.21 vs 네이버 756.83 으로 어긋났다.
+_KR_INDEX_CODE = {"^KS11": "KOSPI", "^KQ11": "KOSDAQ"}
+
+
+def _naver_index(code: str):
+    """네이버 국내지수 — (현재가, 등락%, 등락포인트). 모두 부호 포함. 실패 시 None."""
+    d = requests.get(f"https://m.stock.naver.com/api/index/{code}/basic",
+                     headers=_MOBILE_UA, timeout=8).json()
+    price = float(str(d["closePrice"]).replace(",", ""))
+    chg = float(str(d["fluctuationsRatio"]).replace(",", ""))
+    pt = float(str(d["compareToPreviousClosePrice"]).replace(",", ""))
+    return price, chg, pt
+
+
+def _yahoo_prev_close(res: dict, price: float):
+    """전일 종가 — 야후 chartPreviousClose 를 믿지 말고 일별 종가 시리즈로 직접 구한다.
+    (chartPreviousClose 가 stale 하게 들어오는 사례가 실측됨 → 등락률이 통째로 틀어짐)
+    마지막 일봉이 '오늘 바'(현재가와 일치)면 그 직전 봉이 전일 종가, 아니면 마지막 봉이 전일 종가."""
+    try:
+        closes = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]
+    except Exception:
+        closes = []
+    if len(closes) >= 2 and closes[-1] and abs(price - closes[-1]) / closes[-1] < 0.005:
+        return closes[-2]        # 마지막 봉 = 오늘(진행중/마감) → 직전 봉이 전일 종가
+    if closes:
+        return closes[-1]        # 오늘 봉이 아직 없음 → 마지막 봉이 전일 종가
+    meta = res.get("meta", {})
+    return meta.get("chartPreviousClose") or meta.get("previousClose")
+
+
 def get_indices(symbols) -> list[dict]:
-    """[(이름, 야후심볼, 국기), ...] → [{name, flag, price, chg(%)}].
+    """[(이름, 야후심볼, 국기), ...] → [{name, flag, price, chg(%), chg_pt}].
+    · 국내 지수(코스피·코스닥)는 네이버 공식 시세 사용(야후 부정확).
+    · 해외 지수는 야후를 쓰되 전일 종가를 일별 시리즈로 재계산(야후 previousClose stale 방어).
     실패한 종목은 건너뜀(빈 섹션 방지는 호출부에서 처리)."""
     out = []
     for name, sym, flag in symbols:
+        code = _KR_INDEX_CODE.get(sym)
+        if code:                                   # 국내 지수 → 네이버
+            try:
+                price, chg, pt = _naver_index(code)
+                out.append({"name": name, "flag": flag,
+                            "price": price, "chg": chg, "chg_pt": pt})
+                continue
+            except Exception:
+                pass                               # 실패 시 아래 야후 경로로 폴백
         try:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
-            r = requests.get(url, headers=_UA, timeout=10)
-            meta = r.json()["chart"]["result"][0]["meta"]
-            price = meta.get("regularMarketPrice")
-            prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-            if price is None or not prev:
+            r = requests.get(url, headers=_UA, timeout=10,
+                             params={"range": "5d", "interval": "1d"})
+            res = r.json()["chart"]["result"][0]
+            price = res["meta"].get("regularMarketPrice")
+            if price is None:
+                continue
+            prev = _yahoo_prev_close(res, price)   # chartPreviousClose 대신 시리즈 기준
+            if not prev:
                 continue
             out.append({
                 "name": name,
