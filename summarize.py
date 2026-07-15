@@ -162,6 +162,41 @@ def _watchlist_context() -> str:
     return f"관심 섹터: {sectors}\n관심 종목: {tickers}"
 
 
+def macro_brief(label: str, headlines: list[str]) -> str | None:
+    """(매크로 속보) 연준 FOMC·CPI 등 발표 헤드라인들을 2~3문장으로 정리. 실패/키없음 시 None.
+    금리 결정·정책 기조·향후 전망 위주. 헤드라인 근거만(환각 방지), 매매 판단 금지."""
+    if not _KEY or not headlines:
+        return None
+    sysmsg = (
+        f"너는 한국 개인투자자를 위한 '{label} 발표 속보' 정리가다. "
+        "아래 헤드라인들만 근거로, 발표 핵심을 2~3문장의 자연스러운 서술형으로 정리하라. "
+        "금리 결정·물가 수치·정책 기조·향후 전망 위주로. 헤드라인에 없는 사실·수치는 절대 지어내지 마라. "
+        "주가 예측·매수/매도 판단은 금지. 근거가 빈약하면 '세부 내용 확인 필요'라고 밝혀라."
+    )
+    body = {
+        "system_instruction": {"parts": [{"text": sysmsg}]},
+        "contents": [{"parts": [{"text": "헤드라인:\n" + "\n".join(f"- {h}" for h in headlines)}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {"type": "OBJECT", "properties": {"brief": {"type": "STRING"}},
+                               "required": ["brief"]},
+            "maxOutputTokens": 512, "temperature": 0.3,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }
+    for model in [config.SUMMARY_MODEL, *config.SUMMARY_FALLBACK_MODELS]:
+        try:
+            r = requests.post(_URL.format(model=model), params={"key": _KEY}, json=body, timeout=20)
+            r.raise_for_status()
+            parts = r.json()["candidates"][0]["content"]["parts"]
+            brief = json.loads("".join(p.get("text", "") for p in parts)).get("brief", "").strip()
+            if brief and not any(p in brief for p in _ADVICE_PATTERNS):
+                return brief
+        except Exception:
+            continue
+    return None
+
+
 def market_context(indices, fear_greed, market_flow, quotes, region=None) -> str:
     """(한 줄 총평용) 오늘의 시장 데이터를 프롬프트 텍스트로 — 지수·공포탐욕·국내수급·급변 종목.
     region이 주어지면 그 시장 지수만 넘긴다(나스닥 브리핑인데 코스피 얘기를 하지 않도록).

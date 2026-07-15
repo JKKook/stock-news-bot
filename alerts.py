@@ -155,6 +155,93 @@ def _market_confirm(title: str, indices: list) -> str:
     return ("\n" + " · ".join(parts)) if parts else ""
 
 
+def check_macro(state: dict, kst: datetime, indices: list) -> list[str]:
+    """(매크로 속보) 미 CPI·연준 FOMC 발표일 & 발표 시각(ET) 이후에 관련 내용을 속보로.
+    급락/폭락 키워드가 없어도 발표일이면 흘려보낸다(물가·금리는 투자 핵심 정보). label별 하루 1회.
+    · CPI  → 최신 헤드라인(제목에 수치 포함) 그대로
+    · FOMC → 헤드라인들을 AI로 2~3문장 정리(연준 성명 핵심). 미국 지수 반응도 붙임."""
+    from zoneinfo import ZoneInfo
+    from catalysts import releases_between
+
+    et = datetime.now(ZoneInfo("America/New_York"))
+    et_today, kst_today = et.date().isoformat(), kst.date().isoformat()
+    lo, hi = min(et_today, kst_today), max(et_today, kst_today)
+
+    events = state.get("events", {})
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=config.ALERT_LOOKBACK_MIN)
+    idx = {i["name"]: i for i in (indices or [])}
+    alerts, fresh = [], []
+
+    for ev in config.MACRO_ALERT_EVENTS:
+        # ── 오늘이 발표일인가 (FRED release_id 또는 macro_calendar 날짜) ──
+        if "release_id" in ev:
+            hit = bool(releases_between(ev["release_id"], lo, hi))
+        else:
+            days = set(config.MACRO_DATES.get(ev.get("dates_key", ""), []))
+            hit = bool(days & {et_today, kst_today})
+        if not hit:
+            continue
+        # ── 발표 시각(ET) 이후인가 — 결과/성명 확보 ──
+        ah, am = ev.get("after_et", [0, 0])
+        if (et.hour, et.minute) < (ah, am):
+            continue
+        fp = f"macro:{ev['label']}:{et_today}"        # 발표일 기준 하루 1회
+        if fp in events:
+            continue
+
+        # ── 관련 헤드라인 수집(발표 시각 이후·lookback 이내·키워드 매칭) ──
+        found = []
+        for query, lang in ev["queries"]:
+            try:
+                feed = feedparser.parse(_gnews_url(query, lang))
+            except Exception:
+                continue
+            for e in feed.entries[:15]:
+                title = _clean_title(e)
+                low = title.lower()
+                pub = _published(e)
+                if pub is None or pub < cutoff:
+                    continue
+                if not any(k.lower() in low for k in ev["keywords"]):
+                    continue
+                if any(x in title for x in config.ALERT_NEWS_EXCLUDE):
+                    continue
+                shown = title if lang == "ko" else translate_text(title)
+                found.append((pub, shown, e.get("link", "").strip(), _source(e)))
+        if not found:
+            continue
+        found.sort(key=lambda x: x[0], reverse=True)   # 최신순
+
+        # ── 본문 구성 ──
+        header = f"📢 **{ev['label']} 발표** 🇺🇸"
+        if ev.get("summarize"):
+            from summarize import macro_brief
+            brief = macro_brief(ev["label"], [f[1] for f in found[:6]])
+            body = brief or found[0][1]
+        else:
+            body = found[0][1]
+        block = f"{header}\n{body}"
+        # 미국 지수 반응(있으면)
+        react = [f"{n} {idx[n]['chg']:+.1f}%" for n in ("나스닥", "S&P500", "다우") if n in idx]
+        if react:
+            block += "\n📊 " + " · ".join(react)
+        link = found[0][2]
+        src = found[0][3]
+        if src and not ev.get("summarize"):
+            block += f" ({src})"
+        if link:
+            block += f"\n<{link}>"
+
+        alerts.append(block)
+        events[fp] = now.isoformat()
+        fresh.append(fp)
+
+    if fresh:
+        state["events"] = events
+    return alerts
+
+
 def _is_market_closed_kst(kst: datetime) -> bool:
     """토·일 또는 한국 공휴일(KST)이면 True — 이때는 지수 급등락 속보를 보내지 않고
     전쟁·지정학 / 심각한 경제 충격 기사만 발송한다(config.ALERT_WEEKEND_ONLY)."""
@@ -284,6 +371,7 @@ def main() -> None:
     if not closed:
         alerts += check_indices(state, today, indices, kst)
         alerts += check_fng(state)
+    alerts += check_macro(state, kst, indices)   # 미 CPI·연준 FOMC 발표일 속보(휴장 무관)
     alerts += check_news(state, indices, weekend=closed)
 
     save_state(state)

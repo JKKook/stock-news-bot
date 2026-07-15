@@ -547,3 +547,51 @@ MOVERS_US_MIN_MCAP = 2e9      # 해외 시총 하한($) = 20억달러 — 마이
 
 # Up & Down 이유 뉴스 — 이 시간 이내 기사만 (오늘 움직임의 이유여야 하므로)
 MOVERS_REASON_HOURS = 30
+
+
+# ════════════════════════════════════════════════════════════════
+# (매크로 발표일 속보) 미 CPI·연준 FOMC 발표일엔 급락 키워드가 없어도 관련 내용을 속보로.
+#   투자 핵심 정보(물가·금리)라 별도 경로로 확실히 발송. label별 하루 1회.
+#   · release_id : FRED 릴리스 번호로 발표일 자동 감지(CPI=10, 고용=50)
+#   · dates_key  : macro_calendar.json 의 키(FOMC 등 FRED로 감지 안 되는 것)
+#   · after_et   : 발표 시각(ET) — 이 시각 이후에만 발송(결과/성명 확보). [시,분]
+#   · summarize  : True면 헤드라인들을 AI로 2~3문장 정리(연준 성명 등), False면 최신 헤드라인 그대로
+MACRO_ALERT_EVENTS = [
+    {
+        "label": "미 소비자물가(CPI)",
+        "release_id": 10,
+        "after_et": [8, 35],            # CPI는 ET 08:30 발표
+        "queries": [("미국 CPI 소비자물가 지수 발표", "ko"),
+                    ("US CPI inflation report", "en")],
+        "keywords": ["cpi", "소비자물가", "인플레이션", "물가", "inflation", "consumer price"],
+        "summarize": False,             # 제목에 수치가 있어 헤드라인 그대로
+    },
+    {
+        "label": "미 연준 FOMC 통화정책",
+        "dates_key": "FOMC",            # macro_calendar.json 의 FOMC 일정
+        "after_et": [14, 5],            # FOMC 성명은 ET 14:00 발표
+        "queries": [("연준 FOMC 기준금리 결정 파월", "ko"),
+                    ("Fed FOMC rate decision statement Powell", "en")],
+        "keywords": ["fomc", "연준", "기준금리", "파월", "fed", "powell",
+                     "rate decision", "금리 동결", "금리 인하", "금리 인상", "통화정책"],
+        "summarize": True,              # 연준 성명 내용을 AI로 정리
+    },
+]
+
+# macro_calendar.json — FRED로 감지 안 되는 발표일(FOMC 등). 연 1회 갱신(Fed 공식 일정).
+MACRO_DATES = {}
+
+
+def _apply_macro_calendar_json():
+    global MACRO_DATES
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "macro_calendar.json")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            MACRO_DATES = json.load(f)
+    except Exception as e:
+        print(f"⚠️  macro_calendar.json 파싱 실패({e})")
+
+
+_apply_macro_calendar_json()

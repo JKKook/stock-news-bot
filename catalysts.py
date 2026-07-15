@@ -61,6 +61,22 @@ def _kr_cpi_dates(today, horizon) -> list:
     return out
 
 
+def releases_between(release_id: int, frm: str, to: str) -> list[str]:
+    """(매크로 속보) FRED release_id 의 발표일 중 [frm, to] 문자열 범위. 키없음/실패 시 []."""
+    if not _FRED_KEY:
+        return []
+    try:
+        r = requests.get(_FRED_URL, timeout=12, params={
+            "release_id": release_id, "api_key": _FRED_KEY, "file_type": "json",
+            "include_release_dates_with_no_data": "true", "sort_order": "asc",
+        })
+        r.raise_for_status()
+        return [d["date"] for d in r.json().get("release_dates", [])
+                if frm <= d.get("date", "") <= to]
+    except Exception:
+        return []
+
+
 def economic_events() -> list[dict]:
     """앞으로 CATALYST_DAYS_AHEAD 일 내 경제지표 발표일.
     · 미국: FRED 공식 릴리스(FRED_API_KEY 있을 때).
