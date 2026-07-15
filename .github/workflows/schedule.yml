@@ -43,6 +43,8 @@ jobs:
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # 시장별 리서치 노트 — CF Worker가 개장/마감 시각에 맞춰 넘긴다(빈값이면 전체 브리핑)
-          BRIEF_FOCUS: ${{ inputs.focus }}
-          BRIEF_KIND: ${{ inputs.kind }}
+          # 시장별 리서치 노트 — CF Worker가 개장/마감 시각에 맞춰 넘긴다(빈값이면 전체 브리핑).
+          #   ⚠️ workflow_dispatch 입력은 'github.event.inputs.*'로 읽어야 한다.
+          #      'inputs.*'(재사용 워크플로용)는 빈 값으로 평가돼 focus가 사라졌었음.
+          BRIEF_FOCUS: ${{ github.event.inputs.focus }}
+          BRIEF_KIND: ${{ github.event.inputs.kind }}
