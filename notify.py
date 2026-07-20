@@ -150,7 +150,7 @@ def _one_table(rows: list) -> list[str]:
     lines = ["```"]
     for i, r in enumerate(rows):
         cells = [_pad(r[0], widths[0])] + [_pad(r[j], widths[j], True) for j in range(1, ncol)]
-        line = " ".join(cells)
+        line = " ".join(cells).rstrip()   # 마지막 아이콘 열이 빈 행의 후행 공백 제거
         lines.append(line)
         if i == 0:
             lines.append("─" * _dwidth(line))
@@ -173,16 +173,20 @@ def _watchlist_table_blocks(quotes: dict) -> list[list[str]]:
     for region, flag in [("해외", "🇺🇸"), ("국내", "🇰🇷")]:
         if not groups[region]:
             continue
-        rows = [("종목", "가격", "등락", "BB", "PER")]
+        rows = [("종목", "가격", "등락", "BB", "PER", "")]
         for label, d in groups[region]:
-            # 해외는 티커 심볼(좁고 인식됨)·USD, 국내는 한글명 8폭 컷·천원
+            # 해외는 티커 심볼(좁고 인식됨)·USD, 국내는 한글 전체명·천원.
+            #   종목명은 자르지 않고 전체를 쓴다 — _one_table 이 열 최대폭에 맞춰 공백 패딩하므로
+            #   가장 긴 이름 기준으로 가격·등락 열이 일직선으로 정렬된다(모바일 폭보다 정렬 우선).
             if region == "해외":
                 name, price = (TICKER_SYMBOLS.get(label) or label), _compact_price(d["price"])
             else:
-                name, price = _cap_width(label, 8), _price_kwon(d["price"])
-            name += _bb_icon(d.get("bb_pct"))     # 밴드 상단🔺/하단🔻 한눈에
+                name, price = label, _price_kwon(d["price"])
             bb = f"{d['bb_pct']:.0f}" if d.get("bb_pct") is not None else "-"
-            rows.append((name, price, f"{d['chg']:+.1f}%", bb, _per_num(d)))
+            # 밴드 극단 아이콘(🔺🔻)은 '행 맨 끝'에 둔다 — 색이모지는 monospace에서 폭이
+            #   정확히 2칸으로 렌더되지 않아, 종목명↔가격 사이에 끼면 뒤 열 정렬이 밀린다.
+            #   정렬에 영향 없는 마지막 열로 빼면 국내·해외 모두 가격·등락 열이 어긋나지 않는다.
+            rows.append((name, price, f"{d['chg']:+.1f}%", bb, _per_num(d), _bb_icon(d.get("bb_pct"))))
         body.append(f"**{flag} {region}**")
         body += _one_table(rows)
     body.append("_🔺밴드 상단권(≥80) · 🔻하단권(≤20) · 국내 가격=천원 · 해외=$ · PER=Trailing_")
