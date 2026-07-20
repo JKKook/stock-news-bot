@@ -7,6 +7,7 @@
 """
 
 import json
+import re
 import time
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -42,6 +43,27 @@ def load_state() -> dict:
 def save_state(s: dict) -> None:
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(s, f, ensure_ascii=False)
+
+
+# ── (Layer 5) 내용 유사도 중복 억제 헬퍼 ────────────────────────────
+_NORM_RE = re.compile(r"[^0-9a-z가-힣]+")
+
+
+def _norm_title(title: str) -> str:
+    """비교용 정규화 — 소문자 + 한글·영숫자만 남김(공백·문장부호·이모지 제거)."""
+    return _NORM_RE.sub("", title.lower())
+
+
+def _title_sim(a: str, b: str) -> float:
+    """두 정규화 제목의 문자 bigram Jaccard 유사도(0~1).
+    단어 순서·조사 차이에 강해, 출처만 다른 재탕 헤드라인을 언어 무관하게 잡는다."""
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    ga = {a[i:i + 2] for i in range(len(a) - 1)} or {a}
+    gb = {b[i:i + 2] for i in range(len(b) - 1)} or {b}
+    return len(ga & gb) / len(ga | gb)
 
 
 # 세션 판정(정규장/야간선물/장마감)은 market.index_session 공유 — 브리핑 대시보드와 동일 기준.
@@ -243,9 +265,23 @@ def check_macro(state: dict, kst: datetime, indices: list) -> list[str]:
 
 
 def _is_market_closed_kst(kst: datetime) -> bool:
-    """토·일 또는 한국 공휴일(KST)이면 True — 이때는 지수 급등락 속보를 보내지 않고
-    전쟁·지정학 / 심각한 경제 충격 기사만 발송한다(config.ALERT_WEEKEND_ONLY)."""
-    return kst.weekday() >= 5 or config.is_kr_holiday(kst.date())
+    """휴장(급등락 억제) 모드인지 — 이때는 지수 급등락 속보를 보내지 않고
+    전쟁·지정학 / 심각한 경제 충격 기사만 발송한다(config.ALERT_WEEKEND_ONLY).
+
+    · 토·일 또는 한국 공휴일(KST) → True
+    · 주말·공휴일 직후 '첫 거래일'의 코스피 정규장 개장(09:00) 전(00:00~08:59) → True
+      (예: 월요일 새벽. 이 시간대 '급락/폭락' 속보는 직전 주말 흐름을 되짚는 stale 기사라
+       다음 정규장이 열릴 때까지 지수 알림에서 제외한다.)
+      단, 어제가 정규 거래일이면 밤사이 미국장이 실제로 열려 있었으므로(KST 심야=미 정규장)
+      개장 전이라도 억제하지 않는다 — 진짜 라이브 급락 속보를 놓치지 않기 위함."""
+    d = kst.date()
+    if kst.weekday() >= 5 or config.is_kr_holiday(d):
+        return True
+    if kst.hour < 9:                                    # 첫 거래일 개장(09:00) 전
+        prev = d - timedelta(days=1)
+        if prev.weekday() >= 5 or config.is_kr_holiday(prev):
+            return True
+    return False
 
 
 def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
@@ -255,6 +291,10 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
     cutoff = now - timedelta(minutes=config.ALERT_LOOKBACK_MIN)
     window = timedelta(hours=config.ALERT_EVENT_WINDOW_HOURS)
     kw = [k.lower() for k in config.ALERT_KEYWORDS]
+    # (L5) 최근 발송 제목(정규화) — [[iso, norm], ...]. dup 창 지난 건 버리고 비교 대상만 남긴다.
+    dup_window = timedelta(hours=config.ALERT_DUP_WINDOW_HOURS)
+    sent_titles = [e for e in state.get("sent_titles", [])
+                   if len(e) == 2 and (now - _parse_dt(e[0])) < dup_window]
 
     # ── 1단계: 후보 수집 (조기 종료 없이 — L1 날짜·키워드·L2 컬럼 게이트 통과분) ──
     candidates = []
@@ -304,8 +344,17 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
             sent.add(key)
             fresh_keys.append(key)
             continue
+        # Layer 5) 내용 유사도 — 출처만 다른 재탕(제목이 조금 다른 같은 사건)이 최근 발송분과
+        #   THRESHOLD 이상 겹치면 억제. 같은 실행 내 선정분(sent_titles에 즉시 추가됨)도 함께 비교.
+        norm = _norm_title(c["title"])
+        if norm and any(_title_sim(norm, e[1]) >= config.ALERT_DUP_SIM_THRESHOLD
+                        for e in sent_titles):
+            sent.add(key)
+            fresh_keys.append(key)
+            continue
         sent.add(key)
         fresh_keys.append(key)
+        sent_titles.append([now.isoformat(), norm])   # 이후 후보·다음 실행과의 비교 대상에 포함
         if fp:
             events[fp] = now.isoformat()
             picked_fp.add(fp)
@@ -322,6 +371,8 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
     state["events"] = {fp: t for fp, t in events.items() if (now - _parse_dt(t)) < window}
     # 최근 보낸 기사 키 캡(300개)
     state["sent"] = (state.get("sent", []) + fresh_keys)[-300:]
+    # (L5) 최근 발송 제목도 캡(300개) — dup 창 안에서 재탕 비교에 사용
+    state["sent_titles"] = sent_titles[-300:]
     return alerts
 
 
