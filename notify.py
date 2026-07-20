@@ -178,13 +178,15 @@ def _watchlist_table_blocks(quotes: dict) -> list[list[str]]:
             groups[r].append((label, d))
 
     body = ["### ⭐ 관심종목 지표"]
-    header = ("종목", "가격", "등락", "PER", "BB")   # BB는 마지막 — 밴드 아이콘(🔺🔻)이 BB 바로 뒤에 붙는다
+    # 가격 헤더에 통화 기호 — 해외=달러($), 국내=천원(￦, 값은 천원 단위). BB는 마지막(🔺🔻이 BB 뒤).
     for region, flag in [("해외", "🇺🇸"), ("국내", "🇰🇷")]:
         if not groups[region]:
             continue
+        price_hdr = "가격($)" if region == "해외" else "가격(천￦)"
+        header = ("종목", price_hdr, "등락", "PER", "BB")
         data = []
         for label, d in groups[region]:
-            # 해외는 티커 심볼(좁고 인식됨)·USD, 국내는 한글 전체명·천원(자르지 않음).
+            # 해외는 티커 심볼(좁고 인식됨)·달러, 국내는 한글 전체명·천원(자르지 않음).
             #   표는 _fw_table 로 전각 정렬 — 밴드 아이콘(🔺🔻)은 격자 밖(행 끝=BB 뒤)에 붙는다.
             if region == "해외":
                 name, price = (TICKER_SYMBOLS.get(label) or label), _compact_price(d["price"])
