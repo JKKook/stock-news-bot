@@ -376,6 +376,98 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
     return alerts
 
 
+# ── 2-1) 섹터 큰 호재·악재 속보 ──────────────────────────────────
+def check_sectors(state: dict) -> list[str]:
+    """관심 섹터(config.SECTORS)의 '엄청난' 호재/악재만 실시간 속보로.
+    섹터 검색어로 찾은 최근 기사에 강한 호재/악재 키워드가 있을 때만 인정(일반 소식 무시).
+    노이즈 억제: L1 날짜·L2 회고컷·L5 유사도 + 섹터 지문(섹터:방향)으로 18h 내 재알림 억제.
+    표시: ⭐ **[섹터 · 호재]** / ❗ **[섹터 · 악재]** (급락/규제 등 시장 속보와 별개 라인)."""
+    if not config.ALERT_SECTOR_ENABLE:
+        return []
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=config.ALERT_LOOKBACK_MIN)
+    window = timedelta(hours=config.ALERT_EVENT_WINDOW_HOURS)
+    dup_window = timedelta(hours=config.ALERT_DUP_WINDOW_HOURS)
+    pos = [k.lower() for k in config.ALERT_SECTOR_POSITIVE]
+    neg = [k.lower() for k in config.ALERT_SECTOR_NEGATIVE]
+
+    sent = set(state.get("sent", []))
+    sec_events = dict(state.get("sector_events", {}))     # 섹터 지문 → 마지막 알림 ISO
+    titles_all = list(state.get("sent_titles", []))
+    recent = [e for e in titles_all if len(e) == 2 and (now - _parse_dt(e[0])) < dup_window]
+
+    # ── 후보 수집 (섹터 검색 + 강한 호재/악재 게이트) ──
+    candidates = []
+    for sector, queries in config.SECTORS.items():
+        for query, lang, region in queries:
+            try:
+                feed = feedparser.parse(_gnews_url(query, lang))
+            except Exception:
+                continue
+            for e in feed.entries[:15]:
+                title = _clean_title(e)
+                key = title.replace(" ", "")[:80]
+                if not key or key in sent:
+                    continue
+                low = title.lower()
+                pub = _published(e)
+                if pub is None or pub < cutoff:                         # L1 날짜
+                    continue
+                if any(x in title for x in config.ALERT_NEWS_EXCLUDE):  # L2 회고컷
+                    continue
+                is_neg = any(k in low for k in neg)
+                is_pos = any(k in low for k in pos)
+                if not (is_neg or is_pos):        # '엄청난' 게이트 — 둘 다 아니면 무시
+                    continue
+                direction = "악재" if is_neg else "호재"   # 겹치면 악재 우선(리스크)
+                candidates.append({
+                    "sector": sector, "direction": direction, "pub": pub, "title": title,
+                    "lang": lang, "region": region, "src": _source(e),
+                    "link": e.get("link", "").strip(), "key": key,
+                    "fp": f"sector:{sector}:{direction}",
+                })
+
+    candidates.sort(key=lambda c: c["pub"], reverse=True)   # 최신순
+
+    # ── 선정 (dedup + 섹터 지문 + L5 유사도) ──
+    alerts, fresh_keys, picked_fp = [], [], set()
+    for c in candidates:
+        if len(alerts) >= config.ALERT_SECTOR_MAX_PER_RUN:
+            break
+        key, fp = c["key"], c["fp"]
+        if key in sent:
+            continue
+        if (sec_events.get(fp) and (now - _parse_dt(sec_events[fp])) < window) or fp in picked_fp:
+            sent.add(key)
+            fresh_keys.append(key)
+            continue
+        norm = _norm_title(c["title"])
+        if norm and any(_title_sim(norm, e[1]) >= config.ALERT_DUP_SIM_THRESHOLD for e in recent):
+            sent.add(key)
+            fresh_keys.append(key)
+            continue
+        sent.add(key)
+        fresh_keys.append(key)
+        entry = [now.isoformat(), norm]
+        recent.append(entry)
+        titles_all.append(entry)
+        sec_events[fp] = now.isoformat()
+        picked_fp.add(fp)
+        shown = c["title"] if c["lang"] == "ko" else translate_text(c["title"])
+        flag = "🇰🇷" if c["region"] == "국내" else "🇺🇸"
+        icon = "⭐" if c["direction"] == "호재" else "❗"
+        src = f" ({c['src']})" if c["src"] else ""
+        block = f"{icon} **[{c['sector']} · {c['direction']}]** {flag}\n{shown}{src}"
+        if c["link"]:
+            block += f"\n<{c['link']}>"
+        alerts.append(block)
+
+    state["sector_events"] = {fp: t for fp, t in sec_events.items() if (now - _parse_dt(t)) < window}
+    state["sent"] = (state.get("sent", []) + fresh_keys)[-300:]
+    state["sent_titles"] = titles_all[-300:]
+    return alerts
+
+
 # ── 3) 공포탐욕 급변 ────────────────────────────────────────────
 def check_fng(state: dict) -> list[str]:
     fg = get_fear_greed()
@@ -424,6 +516,7 @@ def main() -> None:
         alerts += check_fng(state)
     alerts += check_macro(state, kst, indices)   # 미 CPI·연준 FOMC 발표일 속보(휴장 무관)
     alerts += check_news(state, indices, weekend=closed)
+    alerts += check_sectors(state)               # 관심 섹터의 엄청난 호재/악재(휴장 무관)
 
     save_state(state)
 
