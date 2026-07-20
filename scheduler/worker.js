@@ -3,11 +3,12 @@
 //  GitHub Actions 예약 cron(schedule:)은 매일 수 시간 지연되므로,
 //  CF cron(정시)이 GitHub workflow_dispatch API를 호출한다(dispatch 런은 즉시 시작).
 //
-//  발송 시각(리서치 노트 — 해당 시장 섹션만):
-//    · KST 08:30  [마켓 뷰]     코스피/코스닥 개장 전   → focus=KR, kind=view
+//  발송 시각:
+//    · KST 09/16/23  전체 정규 브리핑(종합본)         → focus 없음(build_messages)
+//    · KST 10:00  [마켓 뷰]     코스피/코스닥 개장 후   → focus=KR, kind=view
 //    · KST 16:30  [마켓 클로징] 코스피/코스닥 마감 후   → focus=KR, kind=closing
-//    · ET 09:30   [마켓 뷰]     나스닥 개장            → focus=US, kind=view
-//    · ET 16:10   [마켓 클로징] 나스닥 마감 후          → focus=US, kind=closing
+//    · ET 10:30   [마켓 뷰]     나스닥 개장 1h 후        → focus=US, kind=view
+//    · KST 08:00  [마켓 클로징] 나스닥 마감 후(밤새)     → focus=US, kind=closing
 //    · 10분마다   속보·급변 감시
 //
 //  ⏰ 서머타임: 미국장은 UTC 기준 시각이 EDT/EST에 따라 1시간 밀린다.
@@ -62,6 +63,15 @@ export default {
     // 속보 — 10분마다
     if (cron === "*/10 * * * *") {
       ctx.waitUntil(dispatch(ALERTS_WF, env));
+      return;
+    }
+
+    // 전체 정규 브리핑(종합본) — focus 없이 dispatch → main.py가 build_messages 전체 브리핑 발송.
+    //   KST 고정: UTC 00:00=KST 09:00 / UTC 07:00=KST 16:00 / UTC 14:00=KST 23:00 (하루 3회)
+    //   주말·공휴일 스킵은 main.py가 처리(focus="" 경로) → CF는 무조건 dispatch만.
+    //   focus별 리서치 노트(마켓 뷰/클로징)와는 별개 발송이다.
+    if (cron === "0 0,7,14 * * *") {
+      ctx.waitUntil(dispatch(BRIEFING_WF, env)); // inputs 없음 → focus="" 전체 브리핑
       return;
     }
 
