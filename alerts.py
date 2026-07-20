@@ -390,42 +390,51 @@ def check_sectors(state: dict) -> list[str]:
     dup_window = timedelta(hours=config.ALERT_DUP_WINDOW_HOURS)
     pos = [k.lower() for k in config.ALERT_SECTOR_POSITIVE]
     neg = [k.lower() for k in config.ALERT_SECTOR_NEGATIVE]
+    rival = [k.lower() for k in config.ALERT_SECTOR_RIVAL]
+    rival_tech = [k.lower() for k in config.ALERT_SECTOR_RIVAL_TECH]
 
     sent = set(state.get("sent", []))
     sec_events = dict(state.get("sector_events", {}))     # 섹터 지문 → 마지막 알림 ISO
     titles_all = list(state.get("sent_titles", []))
     recent = [e for e in titles_all if len(e) == 2 and (now - _parse_dt(e[0])) < dup_window]
 
-    # ── 후보 수집 (섹터 검색 + 강한 호재/악재 게이트) ──
+    # 검색 목록: 섹터 투자 검색어 + 경쟁위협 전용 검색어(둘 다 (섹터, 검색어, 언어, 지역) 형태)
+    searches = [(s, q, lang, rg) for s, qs in config.SECTORS.items() for q, lang, rg in qs]
+    searches += list(config.ALERT_RIVAL_QUERIES)
+
+    # ── 후보 수집 (섹터 검색 + 게이트: 경쟁위협 > 악재 > 호재) ──
     candidates = []
-    for sector, queries in config.SECTORS.items():
-        for query, lang, region in queries:
-            try:
-                feed = feedparser.parse(_gnews_url(query, lang))
-            except Exception:
+    for sector, query, lang, region in searches:
+        try:
+            feed = feedparser.parse(_gnews_url(query, lang))
+        except Exception:
+            continue
+        for e in feed.entries[:15]:
+            title = _clean_title(e)
+            key = title.replace(" ", "")[:80]
+            if not key or key in sent:
                 continue
-            for e in feed.entries[:15]:
-                title = _clean_title(e)
-                key = title.replace(" ", "")[:80]
-                if not key or key in sent:
-                    continue
-                low = title.lower()
-                pub = _published(e)
-                if pub is None or pub < cutoff:                         # L1 날짜
-                    continue
-                if any(x in title for x in config.ALERT_NEWS_EXCLUDE):  # L2 회고컷
-                    continue
-                is_neg = any(k in low for k in neg)
-                is_pos = any(k in low for k in pos)
-                if not (is_neg or is_pos):        # '엄청난' 게이트 — 둘 다 아니면 무시
-                    continue
-                direction = "악재" if is_neg else "호재"   # 겹치면 악재 우선(리스크)
-                candidates.append({
-                    "sector": sector, "direction": direction, "pub": pub, "title": title,
-                    "lang": lang, "region": region, "src": _source(e),
-                    "link": e.get("link", "").strip(), "key": key,
-                    "fp": f"sector:{sector}:{direction}",
-                })
+            low = title.lower()
+            pub = _published(e)
+            if pub is None or pub < cutoff:                         # L1 날짜
+                continue
+            if any(x in title for x in config.ALERT_NEWS_EXCLUDE):  # L2 회고컷
+                continue
+            # 경쟁위협: 미·한 외 경쟁 주체 + 약진 신호가 함께면 악재로(보유 종목 위협)
+            if any(k in low for k in rival) and any(k in low for k in rival_tech):
+                direction = "경쟁위협"
+            elif any(k in low for k in neg):
+                direction = "악재"
+            elif any(k in low for k in pos):
+                direction = "호재"
+            else:                                # '엄청난' 게이트 — 아무것도 아니면 무시
+                continue
+            candidates.append({
+                "sector": sector, "direction": direction, "pub": pub, "title": title,
+                "lang": lang, "region": region, "src": _source(e),
+                "link": e.get("link", "").strip(), "key": key,
+                "fp": f"sector:{sector}:{direction}",
+            })
 
     candidates.sort(key=lambda c: c["pub"], reverse=True)   # 최신순
 

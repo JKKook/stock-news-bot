@@ -90,7 +90,7 @@ load_state()  ← alert_state.json  (actions/cache 로 실행 간 이어받기)
    ├─ check_indices()  지수 전일比 ±5/8/15/20% 단계 돌파 시 (단계별 1회)
    ├─ check_fng()      공포탐욕지수가 직전 알림 대비 ±15 변동 시
    ├─ check_news()     속보 키워드 게이트를 통과한 90분 내 새 기사
-   └─ check_sectors()  관심 섹터(SECTORS)의 '엄청난' 호재/악재만 (⭐호재/❗악재)
+   └─ check_sectors()  관심 섹터(SECTORS)의 '엄청난' 호재/악재 + 경쟁국 기술약진 (⭐호재/❗악재·경쟁위협)
    │
 save_state()  → alert_state.json  (sent 키 최근 300개 롤링, 중복 발송 방지)
    │
@@ -104,7 +104,11 @@ send()  조건 충족분(속보 기사 내용)만 발송 — 지수 대시보드
 - `check_indices`: 밴드(`ALERT_INDEX_BANDS = [5,8,15,20]`)를 **더 높은 단계로 돌파할 때만** 1회 알림. 날짜(`day`)가 바뀌면 밴드 리셋.
 - `check_news`: `ALERT_NEWS_QUERIES`로 검색 후 아래 **5중 게이트**를 통과한 기사만. 최대 `ALERT_MAX_PER_RUN(6)`건.
 - `check_fng`: 첫 실행은 기준값만 저장, 이후 `ALERT_FNG_DELTA(15)` 이상 변동 시.
-- `check_sectors`: `SECTORS` 검색어로 찾은 90분 내 기사 중, **강한 호재/악재 키워드**(`ALERT_SECTOR_POSITIVE`/`NEGATIVE`)가 제목에 있을 때만. 일반 시황·소식은 무시 — 구조적·대형 사건만. `⭐ [섹터·호재]` / `❗ [섹터·악재]`. 최대 `ALERT_SECTOR_MAX_PER_RUN(2)`건, 섹터 지문(`섹터:방향`, 18h)·L2·L5 재사용. `ALERT_SECTOR_ENABLE`로 on/off. 상태: `state["sector_events"]`.
+- `check_sectors`: `SECTORS`(+`ALERT_RIVAL_QUERIES`) 검색어로 찾은 90분 내 기사 중, **강한 키워드가 제목에 있을 때만**(일반 소식 무시). 분류 우선순위 **경쟁위협 > 악재 > 호재**:
+  - `⭐ [섹터·호재]` — `ALERT_SECTOR_POSITIVE`(사상 최대 수주·세계 최초·어닝 서프라이즈 등)
+  - `❗ [섹터·악재]` — `ALERT_SECTOR_NEGATIVE`(수출 금지/통제·전면 제재·셧다운·리콜·파산 등)
+  - `❗ [섹터·경쟁위협]` — 미·한 외 경쟁 주체(`ALERT_SECTOR_RIVAL`: 중국·화웨이·딥시크…) + 약진 신호(`RIVAL_TECH`: 능가·가성비·세계 최초…)가 함께면 보유 종목 위협 → 악재로. (예: 중국 DeepSeek·Kimi가 GPT 능가)
+  - 최대 `ALERT_SECTOR_MAX_PER_RUN(2)`건, 섹터 지문(`섹터:방향`, 18h)·L2·L5 재사용. `ALERT_SECTOR_ENABLE`로 on/off. 상태: `state["sector_events"]`.
 
 ### `check_news` 5중 중복/노이즈 필터 (핵심)
 같은 사건이 시차·언론사 차이로 여러 번 오는 '정보 환각'을 막는 5단 방어:

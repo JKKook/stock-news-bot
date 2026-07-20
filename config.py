@@ -428,6 +428,29 @@ ALERT_SECTOR_NEGATIVE = [            # 🔴 엄청난 악재 → ❗
     "export ban", "export curb", "export control", "sanction", "shutdown", "mass recall",
     "antitrust", "bankruptcy", "supply chain crisis", "plunge", "collapse",
 ]
+
+# (경쟁위협) 미·한 외 경쟁국(특히 중국)의 '기술 약진'도 보유 종목엔 악재 → ❗ [섹터·경쟁위협]으로.
+#   조건: 제목에 (경쟁국 주체 RIVAL) + (약진/추월 신호 RIVAL_TECH)가 모두 있을 때만.
+#   예) "중국 딥시크, OpenAI GPT 능가·가성비 우위" / "화웨이, 반도체 세계 최초 양산".
+#   섹터 투자 검색어로는 잘 안 잡혀 ALERT_RIVAL_QUERIES로 별도 검색도 한다.
+ALERT_SECTOR_RIVAL = [              # 미·한 외 경쟁 주체(국가·기업·모델)
+    "중국", "중국산", "중국발", "화웨이", "딥시크", "deepseek", "kimi", "문샷", "moonshot",
+    "알리바바", "텐센트", "바이두", "샤오미", "비야디", "byd", "일본", "대만", "유럽",
+    "china", "chinese", "huawei", "baidu", "alibaba", "tencent", "japan", "taiwan",
+]
+ALERT_SECTOR_RIVAL_TECH = [         # 약진·추월·가성비 등 '위협' 신호
+    "능가", "추월", "앞질", "앞서", "제치", "제쳐", "압도", "우위", "최고 성능", "성능 우위",
+    "가성비", "저비용", "세계 최초", "세계 최고", "돌파", "약진", "굴기", "따라잡", "맹추격",
+    "outperform", "surpass", "beat", "beats", "leapfrog", "state-of-the-art", "sota",
+    "cheaper", "rival", "breakthrough", "world's first", "world first",
+]
+ALERT_RIVAL_QUERIES = [             # (경쟁위협 전용 검색) 섹터명, 검색어, 언어, 지역
+    ("AI",     "중국 AI OR 인공지능 능가 OR 오픈소스 모델",     "ko", "해외"),
+    ("AI",     "China AI model OR Chinese LLM breakthrough",   "en", "해외"),
+    ("반도체",  "중국 반도체 OR 중국산 칩 기술",                "ko", "해외"),
+    ("반도체",  "China semiconductor breakthrough OR Chinese chip", "en", "해외"),
+    ("로보틱스", "중국 휴머노이드 로봇 OR 중국 로봇",            "ko", "해외"),
+]
 # (P3 확장) 속보 가격·거래량 확증 — 속보가 관심종목을 지목하면 실제 |등락|이 이 %↑ 일 때
 #   '📈 실제 반응 동반'(진짜 이례성)으로 확증, 미만이면 '📉 가격 반응 미미'(선반영/영향 제한 가능).
 #   발송은 억제하지 않고 주석만 붙인다(뉴스가 가격을 선행할 수 있어 신속성 보존).
