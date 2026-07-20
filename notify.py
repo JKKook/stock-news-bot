@@ -136,9 +136,10 @@ def _compact_price(v: float) -> str:
 
 
 def _price_kwon(v: float) -> str:
-    """국내 가격을 '천원' 단위로 — 2,425,000원→2425, 309,500→310, 1,141→1.1."""
+    """국내 가격을 '천원' 단위로 — 2,425,000원→2,425, 309,500→310, 1,141→1.1.
+    천원 값이 네 자리↑(=100만원↑)면 천단위 쉼표를 넣어 가독성 확보(예 1,250)."""
     k = v / 1000
-    return f"{k:.0f}" if abs(k) >= 10 else f"{k:.1f}"
+    return f"{k:,.0f}" if abs(k) >= 10 else f"{k:.1f}"
 
 
 def _one_table(rows: list) -> list[str]:

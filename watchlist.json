@@ -31,5 +31,6 @@
   {"label": "삼성전자",        "symbol": "005930.KS", "region": "국내", "lang": "ko", "query": "삼성전자 주가"},
   {"label": "코리아써키트",     "symbol": "007810.KS", "region": "국내", "lang": "ko", "query": "코리아써키트 주가"},
   {"label": "HD현대일렉트릭",   "symbol": "267260.KS", "region": "국내", "lang": "ko", "query": "HD현대일렉트릭 주가"},
-  {"label": "대한광통신",       "symbol": "010170.KS", "region": "국내", "lang": "ko", "query": "대한광통신 주가"}
+  {"label": "대한광통신",       "symbol": "010170.KS", "region": "국내", "lang": "ko", "query": "대한광통신 주가"},
+  {"label": "가온전선",        "symbol": "000500.KS", "region": "국내", "lang": "ko", "query": "가온전선 주가"}
 ]
