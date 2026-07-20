@@ -1,5 +1,5 @@
 [
-  {"label": "스페이스X",      "symbol": null,        "region": "해외", "lang": "en", "query": "SpaceX"},
+  {"label": "스페이스X",      "symbol": "SPCX",      "region": "해외", "lang": "en", "query": "SpaceX"},
   {"label": "테슬라",         "symbol": "TSLA",      "region": "해외", "lang": "en", "query": "Tesla TSLA stock"},
   {"label": "테라다인",        "symbol": "TER",       "region": "해외", "lang": "en", "query": "Teradyne TER stock"},
   {"label": "리게티컴퓨팅",     "symbol": "RGTI",      "region": "해외", "lang": "en", "query": "Rigetti Computing RGTI"},
