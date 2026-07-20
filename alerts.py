@@ -32,6 +32,12 @@ def _parse_dt(iso: str) -> datetime:
         return _EPOCH
 
 
+def _link_line(url: str) -> str:
+    """긴 기사 URL(구글뉴스 등)을 한 줄 하이퍼링크로 — 모바일에서 URL이 여러 줄로 깨져
+    가독성이 떨어지는 것을 막는다. 마스킹 링크라 임베드도 생기지 않는다(기존 <url> 대체)."""
+    return f"\n[🔗 기사 원문]({url})" if url else ""
+
+
 def load_state() -> dict:
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -252,8 +258,7 @@ def check_macro(state: dict, kst: datetime, indices: list) -> list[str]:
         src = found[0][3]
         if src and not ev.get("summarize"):
             block += f" ({src})"
-        if link:
-            block += f"\n<{link}>"
+        block += _link_line(link)
 
         alerts.append(block)
         events[fp] = now.isoformat()
@@ -363,8 +368,7 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
         block = f"{headline(c['title'])} {flag}\n{shown}" + (f" ({c['src']})" if c["src"] else "")
         block += _confirm_move(c["title"])            # (P3) 관심종목 지목 시 가격·거래량 확증
         block += _market_confirm(c["title"], indices)  # (R2) 지수·지정학 지목 시 시장 반응 확증
-        if c["link"]:
-            block += f"\n<{c['link']}>"
+        block += _link_line(c["link"])
         alerts.append(block)
 
     # 사건 지문: window 지난 항목은 정리(상태 파일 비대화 방지)
@@ -467,8 +471,7 @@ def check_sectors(state: dict) -> list[str]:
         icon = "⭐" if c["direction"] == "호재" else "❗"
         src = f" ({c['src']})" if c["src"] else ""
         block = f"{icon} **[{c['sector']} · {c['direction']}]** {flag}\n{shown}{src}"
-        if c["link"]:
-            block += f"\n<{c['link']}>"
+        block += _link_line(c["link"])
         alerts.append(block)
 
     state["sector_events"] = {fp: t for fp, t in sec_events.items() if (now - _parse_dt(t)) < window}
