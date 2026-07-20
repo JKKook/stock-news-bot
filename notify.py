@@ -102,11 +102,6 @@ def _dwidth(s: str) -> int:
     return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
 
 
-def _pad(s: str, w: int, right: bool = False) -> str:
-    gap = " " * max(0, w - _dwidth(s))
-    return (gap + s) if right else (s + gap)
-
-
 def _per_num(d: dict) -> str:
     """표용 PER 한 값 — Trailing 우선(개별 줄과 동일 기준), 없으면 Forward, 적자/결측 처리."""
     t, f = d.get("per_trailing"), d.get("per_forward")
@@ -116,18 +111,6 @@ def _per_num(d: dict) -> str:
     if (t is not None and t < 0) or (f is not None and f < 0):
         return "적자"
     return "-"
-
-
-def _cap_width(s: str, maxw: int) -> str:
-    """표시 폭 기준으로 문자열을 maxw 이하로 자른다(줄넘김 방지용 종목명 제한)."""
-    if _dwidth(s) <= maxw:
-        return s
-    out = ""
-    for ch in s:
-        if _dwidth(out + ch) > maxw:
-            break
-        out += ch
-    return out
 
 
 def _compact_price(v: float) -> str:
@@ -142,18 +125,43 @@ def _price_kwon(v: float) -> str:
     return f"{k:,.0f}" if abs(k) >= 10 else f"{k:.1f}"
 
 
-def _one_table(rows: list) -> list[str]:
-    """헤더행 포함 rows(가변 열) → monospace 표 라인들. 첫 열 좌측·나머지 우측 정렬.
-    열 간격 1칸으로 좁게 — 모바일에서 줄넘김 없이 한눈에 보이도록."""
-    ncol = len(rows[0])
-    widths = [max(_dwidth(r[i]) for r in rows) for i in range(ncol)]
+def _to_fullwidth(s: str) -> str:
+    """반각(ASCII 출력문자)·공백을 전각으로 변환 — 한글·이모지는 그대로.
+    표의 모든 셀을 전각으로 통일하면 글자 폭이 균일해져, 한글을 2칸으로 렌더하지 않는
+    폰트(모바일 Discord 등)에서도 열이 어긋나지 않는다. 대신 숫자가 ７０·＋１．２％처럼 보인다."""
+    out = []
+    for ch in str(s):
+        o = ord(ch)
+        if ch == " ":
+            out.append("　")            # 전각 공백
+        elif 0x21 <= o <= 0x7E:
+            out.append(chr(o + 0xFEE0))      # ASCII 출력문자 → 전각(오프셋 0xFEE0)
+        else:
+            out.append(ch)                   # 한글·이모지 등은 그대로
+    return "".join(out)
+
+
+def _fw_table(header: tuple, data: list) -> list[str]:
+    """전각 정렬 표 — 모든 셀을 전각 변환·전각 공백 패딩해 폰트 무관하게 정렬.
+    첫 열(종목)은 좌측, 나머지는 우측 정렬. 밴드 아이콘(🔺🔻)은 격자 밖(행 끝)에 붙인다.
+    header: 열 제목 튜플. data: [(cells_tuple, icon), ...]."""
+    rows = [header] + [c for c, _ in data]
+    fw = [[_to_fullwidth(c) for c in r] for r in rows]
+    ncol = len(header)
+    widths = [max(len(r[i]) for r in fw) for i in range(ncol)]   # 전부 전각 → 글자수=표시폭
+    icons = [""] + [ic for _, ic in data]
     lines = ["```"]
-    for i, r in enumerate(rows):
-        cells = [_pad(r[0], widths[0])] + [_pad(r[j], widths[j], True) for j in range(1, ncol)]
-        line = " ".join(cells).rstrip()   # 마지막 아이콘 열이 빈 행의 후행 공백 제거
-        lines.append(line)
-        if i == 0:
-            lines.append("─" * _dwidth(line))
+    for idx, r in enumerate(fw):
+        cells = []
+        for j in range(ncol):
+            pad = "　" * (widths[j] - len(r[j]))
+            cells.append((r[j] + pad) if j == 0 else (pad + r[j]))  # 종목=좌, 나머지=우
+        line = "　".join(cells)
+        if icons[idx]:
+            line += " " + icons[idx]
+        lines.append(line.rstrip())
+        if idx == 0:
+            lines.append("─" * _dwidth(lines[-1]))
     lines.append("```")
     return lines
 
@@ -170,25 +178,23 @@ def _watchlist_table_blocks(quotes: dict) -> list[list[str]]:
             groups[r].append((label, d))
 
     body = ["### ⭐ 관심종목 지표"]
+    header = ("종목", "가격", "등락", "PER", "BB")   # BB는 마지막 — 밴드 아이콘(🔺🔻)이 BB 바로 뒤에 붙는다
     for region, flag in [("해외", "🇺🇸"), ("국내", "🇰🇷")]:
         if not groups[region]:
             continue
-        rows = [("종목", "가격", "등락", "BB", "PER", "")]
+        data = []
         for label, d in groups[region]:
-            # 해외는 티커 심볼(좁고 인식됨)·USD, 국내는 한글 전체명·천원.
-            #   종목명은 자르지 않고 전체를 쓴다 — _one_table 이 열 최대폭에 맞춰 공백 패딩하므로
-            #   가장 긴 이름 기준으로 가격·등락 열이 일직선으로 정렬된다(모바일 폭보다 정렬 우선).
+            # 해외는 티커 심볼(좁고 인식됨)·USD, 국내는 한글 전체명·천원(자르지 않음).
+            #   표는 _fw_table 로 전각 정렬 — 밴드 아이콘(🔺🔻)은 격자 밖(행 끝=BB 뒤)에 붙는다.
             if region == "해외":
                 name, price = (TICKER_SYMBOLS.get(label) or label), _compact_price(d["price"])
             else:
                 name, price = label, _price_kwon(d["price"])
             bb = f"{d['bb_pct']:.0f}" if d.get("bb_pct") is not None else "-"
-            # 밴드 극단 아이콘(🔺🔻)은 '행 맨 끝'에 둔다 — 색이모지는 monospace에서 폭이
-            #   정확히 2칸으로 렌더되지 않아, 종목명↔가격 사이에 끼면 뒤 열 정렬이 밀린다.
-            #   정렬에 영향 없는 마지막 열로 빼면 국내·해외 모두 가격·등락 열이 어긋나지 않는다.
-            rows.append((name, price, f"{d['chg']:+.1f}%", bb, _per_num(d), _bb_icon(d.get("bb_pct"))))
+            cells = (name, price, f"{d['chg']:+.1f}%", _per_num(d), bb)
+            data.append((cells, _bb_icon(d.get("bb_pct"))))
         body.append(f"**{flag} {region}**")
-        body += _one_table(rows)
+        body += _fw_table(header, data)
     body.append("_🔺밴드 상단권(≥80) · 🔻하단권(≤20) · 국내 가격=천원 · 해외=$ · PER=Trailing_")
     return [body] if len(body) > 2 else []
 
