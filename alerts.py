@@ -356,8 +356,26 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
     # ── 2단계: 심각도 → 최신순 정렬 (D-3: 가장 중요한 속보를 먼저) ──
     candidates.sort(key=lambda c: (c["sev"], c["pub"]), reverse=True)
 
+    alerts, fresh_keys, picked_fp, picked_display = [], [], set(), []
+
+    # ── 2-1단계: (2차 AI 판정) 지난 속보(회고·후속)·반복 속보 제거 — 실패/키없음 시 기존 로직만 ──
+    if config.ALERT_AI_JUDGE and candidates:
+        from summarize import judge_breaking
+        recent_disp = [t for _iso, t in state.get("recent_sent", [])]
+        top = candidates[:12]                     # 심각도 상위만 판정(토큰·비용 상한)
+        verdicts = judge_breaking(top, recent_disp)
+        if verdicts is not None:
+            keep_idx = {v["i"] for v in verdicts if isinstance(v, dict) and v.get("keep")}
+            kept = []
+            for i, c in enumerate(candidates):
+                if i < len(top) and i not in keep_idx:
+                    sent.add(c["key"])            # 탈락분(지난·반복)은 재판정 방지
+                    fresh_keys.append(c["key"])
+                else:
+                    kept.append(c)
+            candidates = kept
+
     # ── 3단계: 선정 (dedup + 사건 지문 억제, 번역은 선정분만) ──
-    alerts, fresh_keys, picked_fp = [], [], set()
     for c in candidates:
         if len(alerts) >= config.ALERT_MAX_PER_RUN:
             break
@@ -391,6 +409,7 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
         block += _market_confirm(c["title"], indices)  # (R2) 지수·지정학 지목 시 시장 반응 확증
         block += _link_line(c["link"])
         alerts.append(block)
+        picked_display.append([now.isoformat(), shown])   # 반복 속보 판정용 이력
 
     # 사건 지문: window 지난 항목은 정리(상태 파일 비대화 방지)
     state["events"] = {fp: t for fp, t in events.items() if (now - _parse_dt(t)) < window}
@@ -398,6 +417,10 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
     state["sent"] = (state.get("sent", []) + fresh_keys)[-300:]
     # (L5) 최근 발송 제목도 캡(300개) — dup 창 안에서 재탕 비교에 사용
     state["sent_titles"] = sent_titles[-300:]
+    # (2차 판정용) 최근 실제 발송한 속보 제목(가독형) — 반복 속보 판정에 사용(18h 창, 캡 60)
+    rs = [e for e in state.get("recent_sent", [])
+          if len(e) == 2 and (now - _parse_dt(e[0])) < window]
+    state["recent_sent"] = (rs + picked_display)[-60:]
     return alerts
 
 
@@ -463,8 +486,29 @@ def check_sectors(state: dict) -> list[str]:
 
     candidates.sort(key=lambda c: c["pub"], reverse=True)   # 최신순
 
+    alerts, fresh_keys, picked_fp, rec_disp = [], [], set(), []
+
+    # ── (2차 AI 판정) 정말 '엄청난' 호재/악재/경쟁위협 + 오늘 새 사건만 — 실패/키없음 시 키워드 판정 유지 ──
+    if config.ALERT_AI_JUDGE and candidates:
+        from summarize import judge_sector
+        verdicts = judge_sector(candidates)
+        if verdicts is not None:
+            vmap = {v["i"]: v for v in verdicts if isinstance(v, dict) and "i" in v}
+            kept = []
+            for i, c in enumerate(candidates):
+                v = vmap.get(i) or {}
+                verdict = v.get("verdict", "무시")
+                if verdict in ("호재", "악재", "경쟁위협"):
+                    c["direction"] = verdict                     # AI 판정으로 방향 확정
+                    c["fp"] = f"sector:{c['sector']}:{verdict}"   # 지문도 갱신
+                    c["reason"] = (v.get("reason") or "").strip()
+                    kept.append(c)
+                else:
+                    sent.add(c["key"])                            # '무시'는 재판정 방지
+                    fresh_keys.append(c["key"])
+            candidates = kept
+
     # ── 선정 (dedup + 섹터 지문 + L5 유사도) ──
-    alerts, fresh_keys, picked_fp = [], [], set()
     for c in candidates:
         if len(alerts) >= config.ALERT_SECTOR_MAX_PER_RUN:
             break
@@ -492,12 +536,17 @@ def check_sectors(state: dict) -> list[str]:
         icon = "⭐" if c["direction"] == "호재" else "❗"
         src = f" ({c['src']})" if c["src"] else ""
         block = f"{icon} **[{c['sector']} · {c['direction']}]** {flag}\n{shown}{src}"
+        if c.get("reason"):
+            block += f"\n└ {c['reason']}"          # AI가 판단한 '왜 중대한지' 한 줄 근거
         block += _link_line(c["link"])
         alerts.append(block)
+        rec_disp.append([now.isoformat(), shown])   # 반복 속보 판정용 이력(속보 뉴스와 공유)
 
     state["sector_events"] = {fp: t for fp, t in sec_events.items() if (now - _parse_dt(t)) < window}
     state["sent"] = (state.get("sent", []) + fresh_keys)[-300:]
     state["sent_titles"] = titles_all[-300:]
+    state["recent_sent"] = ([e for e in state.get("recent_sent", [])
+                             if len(e) == 2 and (now - _parse_dt(e[0])) < window] + rec_disp)[-60:]
     return alerts
 
 

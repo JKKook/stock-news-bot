@@ -37,3 +37,4 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # 속보 2차 AI 판정(엄청난 호재/악재·지난/반복 속보 필터)

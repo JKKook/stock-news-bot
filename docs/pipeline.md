@@ -104,11 +104,13 @@ send()  조건 충족분(속보 기사 내용)만 발송 — 지수 대시보드
 - `check_indices`: 밴드(`ALERT_INDEX_BANDS = [5,8,15,20]`)를 **더 높은 단계로 돌파할 때만** 1회 알림. 날짜(`day`)가 바뀌면 밴드 리셋.
 - `check_news`: `ALERT_NEWS_QUERIES`로 검색 후 아래 **5중 게이트**를 통과한 기사만. 최대 `ALERT_MAX_PER_RUN(6)`건.
   - **(세션별 제외)** 한 시장 정규장이 열려 있으면 닫힌 반대편 시장의 지수 속보는 stale로 보고 제외 — 미 정규장(KST 밤)엔 코스피/코스닥 속보, 코스피 정규장(KST 낮)엔 나스닥/뉴욕 속보. 제목에 시장 키워드(`ALERT_KR_MARKET_KW`/`ALERT_US_MARKET_KW`)가 **한쪽만** 있을 때만 적용 → 전쟁·지정학 등 비시장 속보는 영향 없음. (`index_session`으로 세션 판정)
+  - **(2차 AI 판정, `ALERT_AI_JUDGE`)** 키워드로 좁힌 상위 후보를 Gemini(`summarize.judge_breaking`)가 재판정 — **지난 속보**(며칠 지난 사건의 회고·후속·전망)·**반복 속보**(`state["recent_sent"]`의 최근 발송분과 같은 사건)·무가치 기사를 걸러 `keep=false`면 제외. 키 없거나 실패 시 기존 로직만(폴백). 후보 있을 때만 1회 호출.
 - `check_fng`: 첫 실행은 기준값만 저장, 이후 `ALERT_FNG_DELTA(15)` 이상 변동 시.
 - `check_sectors`: `SECTORS`(+`ALERT_RIVAL_QUERIES`) 검색어로 찾은 90분 내 기사 중, **강한 키워드가 제목에 있을 때만**(일반 소식 무시). 분류 우선순위 **경쟁위협 > 악재 > 호재**:
   - `⭐ [섹터·호재]` — `ALERT_SECTOR_POSITIVE`(사상 최대 수주·세계 최초·어닝 서프라이즈 등)
   - `❗ [섹터·악재]` — `ALERT_SECTOR_NEGATIVE`(수출 금지/통제·전면 제재·셧다운·리콜·파산 등)
   - `❗ [섹터·경쟁위협]` — 미·한 외 경쟁 주체(`ALERT_SECTOR_RIVAL`: 중국·화웨이·딥시크…) + 약진 신호(`RIVAL_TECH`: 능가·가성비·세계 최초…)가 함께면 보유 종목 위협 → 악재로. (예: 중국 DeepSeek·Kimi가 GPT 능가)
+  - **(2차 AI 판정, `ALERT_AI_JUDGE`)** 키워드 통과 후보를 Gemini(`summarize.judge_sector`)가 재판정 — 정말 '엄청난'지 + **오늘 새 사건**인지 판단해 `호재/악재/경쟁위협/무시`로 확정(무시는 발송 안 함). AI가 방향·지문을 확정하고 **한 줄 근거(`└ …`)**를 알림에 덧붙인다. 키 없거나 실패 시 키워드 판정 유지(폴백).
   - 최대 `ALERT_SECTOR_MAX_PER_RUN(2)`건, 섹터 지문(`섹터:방향`, 18h)·L2·L5 재사용. `ALERT_SECTOR_ENABLE`로 on/off. 상태: `state["sector_events"]`.
 
 ### `check_news` 5중 중복/노이즈 필터 (핵심)

@@ -155,6 +155,79 @@ def _call_model(model: str, body: dict) -> dict | None:
     return out if any(out.values()) else None
 
 
+def _today_kst() -> str:
+    return f"{datetime.now(timezone.utc) + timedelta(hours=9):%Y-%m-%d}"
+
+
+def _judge_call(sysmsg: str, payload: str, item_props: dict, required: list) -> list | None:
+    """공통 배열 판정 호출 — 후보 배열 → 판정 배열(JSON). 키 없거나 실패 시 None(→ 호출측이 폴백)."""
+    if not _KEY:
+        return None
+    body = {
+        "system_instruction": {"parts": [{"text": sysmsg}]},
+        "contents": [{"parts": [{"text": payload}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {"type": "ARRAY", "items": {
+                "type": "OBJECT", "properties": item_props, "required": required}},
+            "maxOutputTokens": 1024, "temperature": 0.1,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }
+    for model in [config.SUMMARY_MODEL, *config.SUMMARY_FALLBACK_MODELS]:
+        try:
+            r = requests.post(_URL.format(model=model), params={"key": _KEY}, json=body, timeout=25)
+            r.raise_for_status()
+            parts = r.json()["candidates"][0]["content"]["parts"]
+            data = json.loads("".join(p.get("text", "") for p in parts))
+            return data if isinstance(data, list) else None
+        except Exception:
+            continue
+    return None
+
+
+def judge_sector(candidates: list[dict]) -> list[dict] | None:
+    """(섹터 속보 2차 판정) 각 후보가 정말 '엄청난' 호재/악재/경쟁위협인지 + 오늘 새 사건인지.
+    candidates: [{"title":.., "sector":..}]. 반환 [{"i":idx, "verdict":호재|악재|경쟁위협|무시, "reason":..}] 또는 None(폴백)."""
+    if not _KEY or not candidates:
+        return None
+    sysmsg = (
+        "너는 한국 개인투자자를 위한 '관심 섹터 속보' 편집자다. 아래 후보 헤드라인을 냉정하게 판정하라.\n"
+        "[분류]\n"
+        "- 호재: 섹터/대표기업 주가를 크게 움직일 '엄청난' 긍정 사건(조 단위·사상 최대 수주/실적, 획기적 상용화·양산, 대규모 투자·M&A, 정부 대형 정책).\n"
+        "- 악재: 구조적·대형 부정 충격(수출규제/제재, 생산중단, 대규모 리콜/소송, 파산, 공급망 붕괴, 대형 사고).\n"
+        "- 경쟁위협: 미국·한국 외 경쟁국(특히 중국)이 우리 섹터·종목을 위협하는 기술 약진(성능 능가, 가성비 압도, 세계 최초).\n"
+        "- 무시: 일반 시황·소폭 등락, 평범한 신제품/전망/목표주가/루머, 그리고 이미 며칠 지난 사건의 후속·회고·정리·전망.\n"
+        "[신선도] 오늘 새로 발생/발표된 사건만 인정. 제목이 과거 사건을 되짚는 후속·정리·전망이면 반드시 '무시'.\n"
+        "[원칙] 확신이 없으면 '무시'. 자극적 단어만으로 통과시키지 마라. 헤드라인에 없는 사실을 지어내지 마라. reason은 20자 내 한 줄 근거."
+    )
+    lines = "\n".join(f"{i}. [{c.get('sector','')}] {c['title']}" for i, c in enumerate(candidates))
+    payload = f"오늘(KST): {_today_kst()}\n후보 헤드라인:\n{lines}"
+    props = {"i": {"type": "INTEGER"}, "verdict": {"type": "STRING"}, "reason": {"type": "STRING"}}
+    return _judge_call(sysmsg, payload, props, ["i", "verdict"])
+
+
+def judge_breaking(candidates: list[dict], recent_sent: list[str]) -> list[dict] | None:
+    """(속보 뉴스 2차 판정) '지난 속보(회고·후속)'·'반복 속보(이미 보낸 사건)'·무가치 기사를 걸러낸다.
+    candidates: [{"title":..}]. recent_sent: 최근 이미 보낸 속보 제목. 반환 [{"i":idx, "keep":bool, "reason":..}] 또는 None(폴백)."""
+    if not _KEY or not candidates:
+        return None
+    sysmsg = (
+        "너는 한국 개인투자자를 위한 '증시 속보' 편집자다. 각 후보가 '지금 보낼 새 속보'로 적합한지 판정하라.\n"
+        "[탈락(keep=false)]\n"
+        "- 지난 속보: 이미 며칠 지난 사건을 되짚는 정리·회고·후속·전망(오늘 발행됐어도 사건 자체가 과거면 탈락).\n"
+        "- 반복 속보: 아래 '최근 이미 보낸 속보'와 사실상 같은 사건.\n"
+        "- 무가치: 단순 시황·소폭 등락 등 속보 가치가 낮은 것.\n"
+        "[유지(keep=true)] 오늘 새로 터진, 아직 안 보낸 중대한 증시 사건.\n"
+        "확신 없으면 keep=false. reason은 짧게."
+    )
+    recent = "\n".join(f"- {t}" for t in recent_sent[:20]) or "(없음)"
+    lines = "\n".join(f"{i}. {c['title']}" for i, c in enumerate(candidates))
+    payload = f"오늘(KST): {_today_kst()}\n최근 이미 보낸 속보:\n{recent}\n\n후보 헤드라인:\n{lines}"
+    props = {"i": {"type": "INTEGER"}, "keep": {"type": "BOOLEAN"}, "reason": {"type": "STRING"}}
+    return _judge_call(sysmsg, payload, props, ["i", "keep"])
+
+
 def _watchlist_context() -> str:
     """관심 섹터·종목 목록을 프롬프트용 텍스트로 (P1-6 사건→관심대상 매핑용)."""
     sectors = ", ".join(config.SECTORS.keys())
