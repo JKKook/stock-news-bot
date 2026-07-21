@@ -38,6 +38,18 @@ def _link_line(url: str) -> str:
     return f"\n[🔗 기사 원문]({url})" if url else ""
 
 
+def _news_market(low: str) -> str | None:
+    """제목(소문자)이 어느 시장 지수 속보인지 — 'KR'(코스피/코스닥) / 'US'(나스닥/뉴욕) / None.
+    한쪽 시장 키워드만 있을 때만 판정한다(양쪽 다·둘 다 없으면 None → 세션 제외 대상 아님)."""
+    kr = any(k.lower() in low for k in config.ALERT_KR_MARKET_KW)
+    us = any(k.lower() in low for k in config.ALERT_US_MARKET_KW)
+    if kr and not us:
+        return "KR"
+    if us and not kr:
+        return "US"
+    return None
+
+
 def load_state() -> dict:
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -300,6 +312,10 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
     dup_window = timedelta(hours=config.ALERT_DUP_WINDOW_HOURS)
     sent_titles = [e for e in state.get("sent_titles", [])
                    if len(e) == 2 and (now - _parse_dt(e[0])) < dup_window]
+    # (세션별 제외) 열려 있는 시장의 반대편(닫힌 시장) 지수 속보는 stale → 제외.
+    kst = now + timedelta(hours=9)
+    kospi_open = index_session("코스피", kst) == "정규장"   # KST 평일 09:00~15:30
+    us_open = index_session("나스닥", kst) == "정규장"       # KST 밤(미 정규장 근사)
 
     # ── 1단계: 후보 수집 (조기 종료 없이 — L1 날짜·키워드·L2 컬럼 게이트 통과분) ──
     candidates = []
@@ -323,6 +339,11 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
                 continue
             # (주말 모드) 토·일엔 지수 급등락 기사는 빼고 전쟁·심각한 경제 충격만 통과
             if weekend and not any(k.lower() in low for k in config.ALERT_WEEKEND_ONLY):
+                continue
+            # (세션별 제외) 미 정규장 중엔 코스피 속보 / 코스피 정규장 중엔 나스닥 속보 제외(stale).
+            #   시장 키워드가 한쪽만 명확할 때만 — 전쟁·지정학 등 비시장 속보는 그대로 통과.
+            mkt = _news_market(low)
+            if (mkt == "KR" and us_open) or (mkt == "US" and kospi_open):
                 continue
             candidates.append({
                 "sev": _severity(low), "pub": pub, "title": title, "lang": lang,

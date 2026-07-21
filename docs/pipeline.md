@@ -103,6 +103,7 @@ send()  조건 충족분(속보 기사 내용)만 발송 — 지수 대시보드
 
 - `check_indices`: 밴드(`ALERT_INDEX_BANDS = [5,8,15,20]`)를 **더 높은 단계로 돌파할 때만** 1회 알림. 날짜(`day`)가 바뀌면 밴드 리셋.
 - `check_news`: `ALERT_NEWS_QUERIES`로 검색 후 아래 **5중 게이트**를 통과한 기사만. 최대 `ALERT_MAX_PER_RUN(6)`건.
+  - **(세션별 제외)** 한 시장 정규장이 열려 있으면 닫힌 반대편 시장의 지수 속보는 stale로 보고 제외 — 미 정규장(KST 밤)엔 코스피/코스닥 속보, 코스피 정규장(KST 낮)엔 나스닥/뉴욕 속보. 제목에 시장 키워드(`ALERT_KR_MARKET_KW`/`ALERT_US_MARKET_KW`)가 **한쪽만** 있을 때만 적용 → 전쟁·지정학 등 비시장 속보는 영향 없음. (`index_session`으로 세션 판정)
 - `check_fng`: 첫 실행은 기준값만 저장, 이후 `ALERT_FNG_DELTA(15)` 이상 변동 시.
 - `check_sectors`: `SECTORS`(+`ALERT_RIVAL_QUERIES`) 검색어로 찾은 90분 내 기사 중, **강한 키워드가 제목에 있을 때만**(일반 소식 무시). 분류 우선순위 **경쟁위협 > 악재 > 호재**:
   - `⭐ [섹터·호재]` — `ALERT_SECTOR_POSITIVE`(사상 최대 수주·세계 최초·어닝 서프라이즈 등)
