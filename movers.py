@@ -1,9 +1,11 @@
 """시장 급등·급락 주요 종목 (Up & Down) — 관심종목이 아니라 '시장이 주목한 종목'.
 
-· 국내: 네이버 모바일 랭킹 API (코스피/코스닥 상승·하락률 상위)
+· 국내: 네이버 모바일 랭킹 API (코스피 급등·급락 중 시총 상위 — 코스닥 제외, 대형주 우선)
         ETF/ETN·우선주 제외 + 거래대금 하한으로 잡주/레버리지 노이즈를 걸러 '의미 있는 움직임'만.
-· 해외: 야후 screener (day_gainers / day_losers) + 시총 하한으로 마이크로캡 제외.
-· 이유: 종목명으로 구글뉴스를 검색해 가장 최신 헤드라인 1건을 '왜 움직였나'로 붙인다.
+· 해외: 야후 screener (day_gainers / day_losers) — 나스닥 상장 + 시총 하한, 시총 상위 우선(NYSE·마이크로캡 제외).
+        표기는 티커(예: NBIS)를 타이틀로 — 미국 종목은 티커로 검색·식별하는 게 일반적.
+· 이유: 종목명으로 구글뉴스를 검색해 가장 최신 헤드라인 1건을 '왜 움직였나'로 붙인다(해외는 한국어 번역).
+· 우선순위: 같은 급등·급락 풀에서 '시총이 큰 종목'을 먼저 — 시장 영향력이 큰 움직임이 정보성↑.
 
 모두 무료·무인증. 실패 시 빈 결과(그레이스풀) — 섹션만 생략되고 봇은 멈추지 않는다.
 """
@@ -30,8 +32,8 @@ def _num(s):
         return None
 
 
-def _kr_side(side: str, market: str, want: int) -> list[dict]:
-    """네이버 랭킹에서 한쪽(up/down) 종목 — ETF/ETN·우선주·저유동성 제외."""
+def _kr_side(side: str, market: str) -> list[dict]:
+    """네이버 랭킹에서 한쪽(up/down) 종목 풀 — ETF/ETN·우선주·저유동성 제외, 시총 부착."""
     out = []
     try:
         r = requests.get(f"https://m.stock.naver.com/api/stocks/{side}/{market}",
@@ -49,50 +51,56 @@ def _kr_side(side: str, market: str, want: int) -> list[dict]:
             chg = _num(s.get("fluctuationsRatio"))
             if chg is None:
                 continue
-            out.append({"name": name, "chg": chg, "market": market})
-            if len(out) >= want:
-                break
+            mcap = _num(s.get("marketValue")) or 0         # 시총(억원) — 우선순위 정렬용
+            out.append({"name": name, "chg": chg, "market": market, "mcap": mcap})
     except Exception:
         return []
     return out
 
 
 def kr_movers(n: int) -> dict:
-    """코스피+코스닥 통합 급등/급락 상위 n종목."""
-    up, down = [], []
-    for mkt in ("KOSPI", "KOSDAQ"):
-        up += _kr_side("up", mkt, n)
-        down += _kr_side("down", mkt, n)
-    up.sort(key=lambda x: -x["chg"])
-    down.sort(key=lambda x: x["chg"])
+    """코스피 급등/급락 중 '시총 상위' n종목 — 대형주 우선(시장 영향력 큰 움직임)."""
+    up = _kr_side("up", "KOSPI")
+    down = _kr_side("down", "KOSPI")
+    up.sort(key=lambda x: -x["mcap"])       # 시총 큰 순 (예: 하이닉스 > 두산)
+    down.sort(key=lambda x: -x["mcap"])
     return {"up": up[:n], "down": down[:n]}
 
 
-def _us_side(scr: str, want: int) -> list[dict]:
-    """야후 screener 한쪽 — 시총 하한으로 마이크로캡 제외."""
+_NASDAQ = {"NMS", "NGM", "NCM"}   # Nasdaq Global Select / Global Market / Capital Market
+
+
+def _us_side(scr: str) -> list[dict]:
+    """야후 screener 한쪽 풀 — 나스닥 상장 + 시총 하한, 티커·시총 부착(NYSE·마이크로캡 제외)."""
     out = []
     try:
         r = requests.get("https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved",
-                         headers=_UA, timeout=10, params={"scrIds": scr, "count": 25})
+                         headers=_UA, timeout=10, params={"scrIds": scr, "count": 50})
         for q in r.json()["finance"]["result"][0].get("quotes", []):
+            if q.get("exchange") not in _NASDAQ:              # 나스닥 상장만
+                continue
             mcap = q.get("marketCap") or 0
             if mcap < config.MOVERS_US_MIN_MCAP:
-                continue
+                continue                                       # 시총 하한(마이크로캡 제외)
             chg = q.get("regularMarketChangePercent")
-            name = q.get("shortName") or q.get("symbol")
-            if chg is None or not name:
+            symbol = q.get("symbol")
+            if chg is None or not symbol:
                 continue
-            out.append({"name": name.split(" - ")[0][:28], "symbol": q.get("symbol"),
-                        "chg": float(chg)})
-            if len(out) >= want:
-                break
+            company = (q.get("shortName") or symbol).split(" - ")[0][:28]
+            # 표기 타이틀은 '티커'(미국 종목은 티커로 검색·식별). 회사명은 뉴스 검색용으로 보관.
+            out.append({"name": symbol, "symbol": symbol, "company": company,
+                        "chg": float(chg), "mcap": float(mcap)})
     except Exception:
         return []
     return out
 
 
 def us_movers(n: int) -> dict:
-    return {"up": _us_side("day_gainers", n), "down": _us_side("day_losers", n)}
+    up = _us_side("day_gainers")
+    down = _us_side("day_losers")
+    up.sort(key=lambda x: -x["mcap"])       # 시총 큰 순 (예: 대형주 > 마이크로캡)
+    down.sort(key=lambda x: -x["mcap"])
+    return {"up": up[:n], "down": down[:n]}
 
 
 # '왜 움직였나'로 부적합한 기사 — 자동 시세봇·정기 분석글(사건을 설명하지 못함)
@@ -152,7 +160,8 @@ def add_reasons(movers: dict, lang: str) -> None:
     from translate import translate_text
     for side in ("up", "down"):
         for m in movers.get(side, []):
-            key = m["name"] if lang == "ko" else (m.get("symbol") or m["name"])
+            # 검색은 회사명(뉴스 매칭↑), 표기 타이틀은 티커 — 국내는 종목명 그대로.
+            key = m["name"] if lang == "ko" else (m.get("company") or m.get("symbol") or m["name"])
             r = _reason(f"{key} 주가" if lang == "ko" else f"{key} stock", lang)
             if r and lang != "ko":
                 try:
