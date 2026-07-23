@@ -233,10 +233,11 @@ def _watchlist_table_blocks(quotes: dict) -> list[list[str]]:
             bb = f"{bb_val:.0f}" if bb_val is not None else "-"
             # 아이콘은 '표시된(반올림) BB' 기준 — 표에 BB 20/80이 보이면 국내·해외 모두 아이콘이 뜬다
             icon = _bb_icon(round(bb_val)) if bb_val is not None else ""
-            rows.append(((name, price, f"{d['chg']:+.1f}%", _per_num(d), bb), icon))
+            du = "📈" if d["chg"] > 0 else ("📉" if d["chg"] < 0 else "➖")   # 등락 방향 아이콘
+            rows.append(((name, price, f"{du}{d['chg']:+.1f}%", _per_num(d), bb), icon))
         body.append(f"**{flag} {region}**")
         body += _mono_table(header, rows)
-    body.append("_🔺상단권(≥80) · 🔻하단권(≤20) · 가격천=천원 · BB=%B(중심50) · PER=Trailing_")
+    body.append("_📈상승·📉하락 · 🔺BB상단권(≥80)·🔻BB하단권(≤20) · 가격천=천원 · BB=%B(중심50) · PER=Trailing_")
     return [body] if len(body) > 2 else []
 
 
@@ -265,15 +266,54 @@ def _fg_zone(score: float):
     return "극단적 탐욕", "🤩"
 
 
+def _short_index_name(name: str) -> str:
+    """표 표기용 축약 — '코스피200 야간선물'→'코스피야간', '나스닥 선물(정규장)'→'나스닥선물'."""
+    if "야간선물" in name:
+        return name.split()[0].replace("200", "") + "야간"
+    if "선물" in name:
+        return name.split()[0].replace("200", "") + "선물"
+    return name
+
+
+def _chg_chart(c: float) -> str:
+    """등락 방향 아이콘(차트형) — 상승 📈 / 하락 📉 / 보합 ➖."""
+    return "📈" if c > 0 else ("📉" if c < 0 else "➖")
+
+
+def _index_table(rows, pw: int, cw: int) -> list[str]:
+    """지수 그룹 1개를 코드블록 표로 — 종목명 전각 6칸 균일 + 숫자 마크다운(우측정렬) + 📈/📉 행끝.
+    숫자 폭(pw·cw)은 전 그룹 공통값을 받아, 그룹이 달라도 구분선 위치가 동일하게 맞는다."""
+    out = ["```"]
+    for r in rows:
+        name = _to_fullwidth(_short_index_name(r["name"])[:6].ljust(6))   # 전각 6칸 균일
+        price = f"{r['price']:,.2f}".rjust(pw)
+        chg = f"{r['chg']:+.2f}%".rjust(cw)
+        out.append(f"{name} | {price} | {chg} {_chg_chart(r['chg'])}")    # 아이콘=행 끝(정렬 유지)
+    out.append("```")
+    return out
+
+
 def _dashboard_blocks(indices, fear_greed) -> list[list[str]]:
     """맨 위 대시보드: 주요 지수 시세 + CNN 공포탐욕지수."""
     blocks = []
     if indices:
-        b = ["### 📊 주요 지수 시세"]
+        # 국기로 그룹 분류 — 🇰🇷 국내 / 🇺🇸 미국 / 그 외(VIX·환율·금·은·코인) 원자재·기타
+        groups = {"국내": [], "미국": [], "기타": []}
         for ix in indices:
-            b.append(f"{ix['flag']} **{ix['name']}**  {ix['price']:,.2f}  {_fmt_chg(ix['chg'])}")
+            fl = ix.get("flag", "")
+            groups["국내" if fl == "🇰🇷" else ("미국" if fl == "🇺🇸" else "기타")].append(ix)
+        # 숫자 폭은 전 지수 공통 최대폭 → 그룹이 달라도 구분선·소수점 정렬 동일
+        pw = max(len(f"{ix['price']:,.2f}") for ix in indices)
+        cw = max(len(f"{ix['chg']:+.2f}%") for ix in indices)
+        b = ["### 📊 주요 지수 시세"]
+        for key, gh in [("국내", "🇰🇷 국내"), ("미국", "🇺🇸 미국"), ("기타", "🌐 원자재·기타")]:
+            if groups[key]:
+                b.append(f"**{gh}**")
+                b += _index_table(groups[key], pw, cw)
         if any("야간선물" in ix["name"] for ix in indices):
-            b.append("_야간선물 = 정규장 마감 후 밤사이 거래(다음날 방향성 참고) · 그 외는 현물 지수_")
+            b.append("_야간선물 = 정규장 마감 후 밤사이 거래(다음날 방향성 참고) · 📈 상승 · 📉 하락_")
+        else:
+            b.append("_📈 상승 · 📉 하락 (등락률 기준)_")
         blocks.append(b)
 
     if fear_greed and fear_greed.get("score") is not None:
@@ -607,7 +647,7 @@ def _emit(blocks: list[list[str]]) -> list[str]:
                 messages.append(text[i:i + DISCORD_LIMIT])
             continue
 
-        # 섹션(##/#) 헤더 앞은 '정확히 빈 줄 1개'로 통일 — 그룹 끝 빈 줄과 겹쳐도 중복 방지
+        # 섹션(##/#) 헤더 앞은 '정확히 빈 줄 1개'로 통일 — 항목(섹션) 간 여백(그룹 끝 빈 줄과 겹쳐도 중복 방지)
         if current and is_header:
             current = current.rstrip("\n") + "\n\n"
         if current and len(current) + len(text) + 1 > DISCORD_LIMIT:
@@ -655,7 +695,11 @@ def _glossary_blocks(rendered: str) -> list[list[str]]:
     hits = [(name, desc) for kw, name, desc in _GLOSSARY if kw in rendered]
     if not hits:
         return []
-    return [["### 📖 용어 (참고)"] + [f"**{n}**: {d}" for n, d in hits]]
+    # 폰트 축소(subtext '-#'). 앞에 zero-width 스페이서 줄을 둬 '용어 영역 전체'를 위 섹션과 띄운다
+    #   (subtext는 '#' 헤더가 아니라 _emit의 헤더 앞 여백이 안 먹으므로 수동 여백).
+    #   각 항목 앞에 '- '를 붙여 목차처럼 구분 — 단 '\-'로 이스케이프(그냥 '- '면 목록 문법으로
+    #   인식돼 항목 간 목록 간격이 벌어짐). '\-'는 디스코드에서 일반 '-'로 렌더되고 목록은 아님.
+    return [["​", "-# **📖 용어 (참고)**"] + [f"-# \\- **{n}**: {d}" for n, d in hits]]
 
 
 def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[list[str]]:
@@ -673,7 +717,7 @@ def _source_blocks(source_links: dict, bloomberg: list[dict] = None) -> list[lis
         return []
 
     def entry(t, l):
-        return f"- [{t}]({l})"  # 제목에 하이퍼링크 (긴 URL 숨김)
+        return f"- [{_safe_link_text(t)}]({l})"  # 제목 하이퍼링크(대괄호 치환·긴 URL 숨김)
 
     blocks, header_done = [], False
     for label, items in groups:
@@ -763,11 +807,46 @@ def _headline_blocks(headlines, today) -> list[list[str]]:
     return [hb]
 
 
+def _safe_link_text(t: str) -> str:
+    """마스킹 링크 [텍스트](URL)가 깨져 raw URL이 노출되는 두 원인을 모두 제거:
+      · 텍스트 속 대괄호 [ ] → ( ) 치환 (예: '[SKT …]' → '(SKT …)')
+      · 텍스트 속 개행·연속 공백 → 한 칸(마스킹 링크 텍스트는 '한 줄'이어야 함)."""
+    t = " ".join(t.split())                       # 개행·탭·연속공백 → 한 칸(한 줄로)
+    return t.replace("[", "(").replace("]", ")")
+
+
+def _headline_link_blocks(source_links, today) -> list[list[str]]:
+    """🔥 오늘의 헤드라인 — 제목을 '주요 기사 링크(하이퍼링크)'로. 별도 Source 섹션과 통합해 중복 제거.
+    (기존: 헤드라인=텍스트 목록 + 하단 Source=링크 목록 → 같은 기사 2번 노출)
+    ⚠️ 기사마다 '별도 블록'으로 반환 — 한 블록에 몰면 긴 URL 합계가 2000자를 넘어 _emit이
+       글자수로 잘라 마스킹 링크가 중간에 깨진다(raw URL 노출). 블록 단위로 나눠 링크 온전성 보장."""
+    groups = [("🇰🇷 한국", source_links.get("국내") or []),
+              ("🇺🇸 미국", source_links.get("해외") or [])]
+    if not any(items for _, items in groups):
+        return []
+    def link(t, l):
+        return f"- [{_safe_link_text(t)}]({l})"   # 제목 하이퍼링크(대괄호·개행 정리·긴 URL 숨김)
+    blocks, rendered = [], 0
+    for label, items in groups:
+        if not items:
+            continue
+        lead = [f"**{label}**", link(*items[0])]
+        if rendered == 0:
+            lead = [f"### 🔥 오늘의 헤드라인 ({today})"] + lead   # 헤더는 첫 기사와 묶어 고아 방지
+        else:
+            lead = [""] + lead                                   # 지역 그룹 사이 여백
+        blocks.append(lead)
+        for t, l in items[1:]:
+            blocks.append([link(t, l)])                          # 기사마다 별도 블록(잘림 방지)
+        rendered += 1
+    return blocks
+
+
 def _finish(blocks) -> list[str]:
     """공통 마무리 — 본문에 실제 등장한 용어만 주석 + 면책 + 구분선."""
     rendered = "\n".join("\n".join(b) for b in blocks)
     blocks += _glossary_blocks(rendered)     # 내용에 따라 동적
-    blocks.append([DISCLAIMER])              # (P0-3) 매수/매도 신호 아님
+    blocks.append(["-# " + DISCLAIMER])      # (P0-3) 매수/매도 신호 아님 — 용어와 같이 축소(subtext)
     blocks.append([SEPARATOR])
     return _emit(blocks)
 
@@ -800,36 +879,65 @@ def build_messages(header, today, indices, fear_greed, yahoo, headlines, market,
       ▶ Up & Down 관심종목 지표(BB·PER)·추격주의·정확도·종목별 수급 · 테마/종목 뉴스
       ▶ 주목할 이벤트 경제지표·실적
     """
+    digest = _summary_blocks(summary)                               # 🧭 오늘의 핵심(AI 요약)
+    headlines_sec = _headline_link_blocks(source_links, today)      # 🔥 오늘의 헤드라인(주요 기사 링크·Source 통합)
+    # 오늘의 핵심 ↔ 오늘의 헤드라인 사이만 여백 추가(zero-width 스페이서 — _emit 헤더 정규화에 안 지워짐)
+    gap = [["​"]] if (digest and headlines_sec) else []
     summary_sec = (_dashboard_blocks(indices, fear_greed)
                    + _kr_market_flow_blocks(market_flow)
-                   + _summary_blocks(summary)
-                   + _headline_blocks(headlines, today))
-    updown_sec = (_watchlist_table_blocks(quotes)
-                  + _watchlist_highlights(quotes)
-                  + _reversal_warnings(quotes)
-                  + (accuracy or [])
-                  + _kr_flow_blocks(quotes)
-                  + _theme_news_blocks(sectors)
-                  + _watchlist_news_blocks(tickers, quotes))
+                   + digest + gap + headlines_sec)
+    # ▶ Up & Down(관심종목·테마) 섹션 전체는 '관심항목 주가추이' 채널로 분리(build_watchlist_messages).
     events_sec = _catalyst_blocks(catalysts)
 
     blocks = [[SEPARATOR, header]]
     if summary_sec:
         blocks += [["**━━ ▶ Summary ━━**"]] + summary_sec
-    if updown_sec:
-        blocks += [["**━━ ▶ Up & Down (관심종목·테마) ━━**"]] + updown_sec
     if events_sec:
         blocks += [["**━━ ▶ 주목할 이벤트 (한국시각) ━━**"]] + events_sec
 
-    blocks += _source_blocks(source_links)
+    # (하단 Source 섹션 제거 — 오늘의 헤드라인이 이미 하이퍼링크라 중복)
     blocks += _verdict_blocks(summary)   # 🧠 한 줄 총평 — 정규 브리핑은 최하단
     return _finish(blocks)
 
 
-def send(messages: list[str]) -> None:
-    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+def build_watchlist_messages(header, quotes, tickers, sectors=None, accuracy=None) -> list[str]:
+    """⭐ '관심항목 주가추이' 채널 전용 — ▶ Up & Down(관심종목·테마) 섹션 전체.
+    지표 표 + 종목별 하이라이트·추격주의·정확도·수급 + 테마 소식 + 관심종목 뉴스.
+    정규 알림(build_messages)에서는 이 섹션을 통째로 제외했고, 여기 한 채널로 모은다."""
+    table = _watchlist_table_blocks(quotes)
+    updown = (_watchlist_highlights(quotes)
+              + _reversal_warnings(quotes)
+              + (accuracy or [])
+              + _kr_flow_blocks(quotes)
+              + _theme_news_blocks(sectors))
+    news = _watchlist_news_blocks(tickers, quotes)
+    body = table + updown + news
+    if not body:
+        return []
+    blocks = [[SEPARATOR, header],
+              ["**━━ ▶ Up & Down (관심종목·테마) ━━**"]] + body
+    return _finish(blocks)
+
+
+# 채널별 웹후크 환경변수 — 미설정 시 메인(DISCORD_WEBHOOK_URL)으로 폴백(점진 배포 안전).
+_CHANNEL_ENV = {
+    "main":       "DISCORD_WEBHOOK_URL",           # 정규 알림(나머지)
+    "alert":      "DISCORD_ALERT_WEBHOOK_URL",      # 속보 뉴스봇
+    "marketview": "DISCORD_MARKETVIEW_WEBHOOK_URL", # 마켓 뷰/클로징
+    "watchlist":  "DISCORD_WATCHLIST_WEBHOOK_URL",  # 관심항목 주가추이
+}
+
+
+def _resolve_webhook(channel: str) -> str | None:
+    """채널 키 → 웹후크 URL. 전용 웹후크 없으면 메인으로 폴백."""
+    env = _CHANNEL_ENV.get(channel, "DISCORD_WEBHOOK_URL")
+    return os.environ.get(env) or os.environ.get("DISCORD_WEBHOOK_URL")
+
+
+def send(messages: list[str], channel: str = "main") -> None:
+    webhook = _resolve_webhook(channel)
     if not webhook:
-        print("⚠️  DISCORD_WEBHOOK_URL 미설정 — 콘솔에만 출력합니다.\n")
+        print(f"⚠️  웹후크 미설정(channel={channel}) — 콘솔에만 출력합니다.\n")
         print("\n\n──────────\n\n".join(messages))
         return
 
@@ -846,4 +954,4 @@ def send(messages: list[str]) -> None:
             resp.raise_for_status()
             break
         time.sleep(0.7)  # 메시지 사이 간격을 둬 rate limit 예방
-    print(f"✅ 디스코드로 {len(messages)}개 메시지를 보냈습니다.")
+    print(f"✅ 디스코드[{channel}]로 {len(messages)}개 메시지를 보냈습니다.")
