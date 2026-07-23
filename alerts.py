@@ -281,6 +281,101 @@ def check_macro(state: dict, kst: datetime, indices: list) -> list[str]:
     return alerts
 
 
+def check_earnings(state: dict, kst: datetime, indices: list) -> list[str]:
+    """(실적 속보) 빅테크+관심종목의 '분기 실적 발표' 결과를 AI로 2~3문장 요약 + 원문 링크(한 줄).
+    · 대상 = config.EARNINGS_BIGTECH ∪ 관심종목(TICKERS), 중복 제거.
+    · 비용 절감: 매 실행 EARNINGS_SCAN_BATCH개씩 순번(cursor)으로 검색(실적 헤드라인은 몇 시간 지속 → 순환 포착).
+    · 결과 신호(EARNINGS_RESULT_KW) 있고 프리뷰(EARNINGS_EXCLUDE_KW) 아닌 최신 기사만.
+    · 회사별 EARNINGS_DUP_DAYS 내 1회(같은 분기 재알림 억제, 전용 상태 earnings)."""
+    if not config.EARNINGS_ALERT_ENABLE:
+        return []
+    from summarize import earnings_brief
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=config.EARNINGS_FRESH_HOURS)
+    result_kw = [k.lower() for k in config.EARNINGS_RESULT_KW]
+    excl = [x.lower() for x in config.EARNINGS_EXCLUDE_KW]
+
+    # 대상 = 빅테크 ∪ 관심종목 — (표시명, 검색베이스, 언어, 지역) + 종목→야후심볼 매핑
+    targets, seen, sym_map = [], set(), {}
+    for name, symbol, base, lang, region in config.EARNINGS_BIGTECH:
+        targets.append((name, base, lang, region)); seen.add(name); sym_map[name] = symbol
+    for name, _q, lang, region in config.TICKERS:
+        if name not in seen:
+            targets.append((name, name, lang, region)); seen.add(name)
+    sym_map.update(config.TICKER_SYMBOLS)   # 관심종목 심볼(빅테크 심볼 우선 유지 후 보강)
+    for name, symbol, *_ in config.EARNINGS_BIGTECH:
+        sym_map[name] = symbol              # 빅테크 심볼로 다시 확정(update가 덮지 않도록)
+    if not targets:
+        return []
+
+    # 순번 배치(cursor) — 이번 실행에서 검색할 대상만
+    cursor = state.get("earnings_cursor", 0) % len(targets)
+    batch = min(config.EARNINGS_SCAN_BATCH, len(targets))
+    window = [targets[(cursor + i) % len(targets)] for i in range(batch)]
+    state["earnings_cursor"] = (cursor + batch) % len(targets)
+
+    # 회사별 중복 억제(전용 상태) — DUP_DAYS 지난 항목은 정리
+    earn = {k: v for k, v in state.get("earnings", {}).items()
+            if (now - _parse_dt(v)) < timedelta(days=config.EARNINGS_DUP_DAYS)}
+
+    alerts, fresh = [], []
+    for name, base, lang, region in window:
+        if len(alerts) >= config.EARNINGS_MAX_PER_RUN:
+            break
+        fp = f"{name}:{now:%G-%V}"                 # 회사+ISO주차 → 같은 분기 발표 1회
+        if fp in earn:
+            continue
+        query = f"{base} 실적" if lang == "ko" else f"{base} earnings results"
+        try:
+            feed = feedparser.parse(_gnews_url(query, lang))
+        except Exception:
+            continue
+        heads, top_link = [], ""
+        for e in feed.entries[:15]:
+            title = _clean_title(e)
+            low = title.lower()
+            pub = _published(e)
+            if pub is None or pub < cutoff:                       # 오늘 발표 결과만
+                continue
+            if not any(k in low for k in result_kw):              # 결과 신호 없음 → 프리뷰/무관
+                continue
+            if any(x in low for x in excl):                       # 발표 전 전망·프리뷰 제외
+                continue
+            if name not in title and (lang != "en" or base.split()[0].lower() not in low):
+                continue                                          # 대상 종목이 제목에 실제로 있는지
+            shown = title if lang == "ko" else translate_text(title)
+            heads.append(shown)
+            if not top_link:
+                top_link = e.get("link", "").strip()
+        if not heads:
+            continue
+
+        brief = earnings_brief(name, heads[:6]) or heads[0]
+        flag = "🇰🇷" if region == "국내" else "🇺🇸"
+        block = f"📊 **[실적] {name} 발표** {flag}\n{brief}"
+        # 실적 발표 '기업 자신의' 주가 등락 + 세모 아이콘(🔺상승/🔻하락) — 지수 반응 대신
+        sym = sym_map.get(name)
+        if sym:
+            try:
+                q = get_quotes({name: sym}).get(name)
+            except Exception:
+                q = None
+            if q and q.get("chg") is not None:
+                chg = q["chg"]
+                tri = "🔺" if chg > 0 else ("🔻" if chg < 0 else "▪️")
+                block += f"\n{name} {chg:+.2f}% {tri}"   # 세모 아이콘 = 주가 오른쪽
+        block += _link_line(top_link)
+
+        alerts.append(block)
+        earn[fp] = now.isoformat()
+        fresh.append(fp)
+
+    if fresh or "earnings" in state or "earnings_cursor" in state:
+        state["earnings"] = earn
+    return alerts
+
+
 def _is_market_closed_kst(kst: datetime) -> bool:
     """휴장(급등락 억제) 모드인지 — 이때는 지수 급등락 속보를 보내지 않고
     전쟁·지정학 / 심각한 경제 충격 기사만 발송한다(config.ALERT_WEEKEND_ONLY).
@@ -597,6 +692,7 @@ def main() -> None:
         alerts += check_indices(state, today, indices, kst)
         alerts += check_fng(state)
     alerts += check_macro(state, kst, indices)   # 미 CPI·연준 FOMC 발표일 속보(휴장 무관)
+    alerts += check_earnings(state, kst, indices) # 빅테크+관심종목 분기 실적 발표 요약(휴장 무관)
     alerts += check_news(state, indices, weekend=closed)
     alerts += check_sectors(state)               # 관심 섹터의 엄청난 호재/악재(휴장 무관)
 
@@ -611,7 +707,7 @@ def main() -> None:
     messages = _pack(header, alerts)   # 속보 기사 내용만 (지수 대시보드 미첨부)
     if messages:
         messages[-1] += f"\n\n{config.DISCLAIMER}"   # (P0-3) 매수/매도 신호 아님
-    send(messages)
+    send(messages, channel="alert")
 
 
 if __name__ == "__main__":
