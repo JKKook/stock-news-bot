@@ -18,7 +18,7 @@ from translate import translate_items, translate_text
 from summarize import summarize, market_context
 from measure import log_reversals, score_and_report
 from movers import get_movers
-from notify import build_messages, build_market_note, send
+from notify import build_messages, build_market_note, build_watchlist_messages, send
 
 
 def _flatten_sectors():
@@ -32,10 +32,10 @@ def _flatten_sectors():
 
 # 리서치 노트 헤더 — (focus, kind) → 제목 (미래에셋 '마켓 뷰/마켓 클로징' 형식 참고)
 _TITLES = {
-    ("KR", "view"):    "📑 **[마켓 뷰] 코스피·코스닥 개장 전**",
-    ("KR", "closing"): "📑 **[마켓 클로징] 코스피·코스닥 마감**",
-    ("US", "view"):    "📑 **[마켓 뷰] 나스닥 개장**",
-    ("US", "closing"): "📑 **[마켓 클로징] 나스닥 마감**",
+    ("KR", "view"):    "🔭 🇰🇷 **[PREVIEW] 코스피·코스닥 개장 전**",
+    ("KR", "closing"): "🔔 🇰🇷 **[CLOSING] 코스피·코스닥 마감**",
+    ("US", "view"):    "🔭 🇺🇸 **[PREVIEW] 나스닥 개장**",
+    ("US", "closing"): "🔔 🇺🇸 **[CLOSING] 나스닥 마감**",
 }
 
 
@@ -88,7 +88,7 @@ def main() -> None:
     focus = (os.environ.get("BRIEF_FOCUS") or "").upper()
     kind = (os.environ.get("BRIEF_KIND") or "").lower()
     region = {"KR": "국내", "US": "해외"}.get(focus)
-    title = _TITLES.get((focus, kind), "📰 **주식 이슈 브리핑**")
+    title = _TITLES.get((focus, kind), "📰 **국내/해외 정규 소식**")
     header = f"{title} — {kst:%Y-%m-%d %H:%M} (KST)"
 
     # 휴장일엔 생략 — 국내 브리핑은 KST 주말·공휴일, 미국 브리핑은 ET 주말 기준(서머타임 자동).
@@ -178,18 +178,22 @@ def main() -> None:
     accuracy = score_and_report(quotes)
 
     if region:
-        # 📑 마켓 뷰 / 마켓 클로징 — 시장 리서치 노트(정규 브리핑과 중복 없음)
+        # 📑 마켓 뷰 / 마켓 클로징 — 시장 리서치 노트 → '마켓뷰' 채널
         print("시장 급등·급락 종목 수집 중...")
         movers = get_movers(region)
         sources = _headline_sources(headlines, pool)   # AI 기사 요약의 '참고' 출처
         messages = build_market_note(header, region, indices, summary, movers,
                                      catalysts, kind, sources)
+        send(messages, channel="marketview")
     else:
-        # 📰 정규 브리핑 — 관심종목·테마 중심 종합본
+        # 📰 정규 브리핑 — 나머지는 '메인' 채널, 관심종목 표·뉴스는 '관심항목' 채널로 분리
         messages = build_messages(header, today, indices, fear_greed, yahoo, headlines,
                                   market, sectors, tickers, bloomberg, source_links, quotes,
                                   catalysts, summary, accuracy, market_flow)
-    send(messages)
+        send(messages, channel="main")
+        watchlist_msgs = build_watchlist_messages(header, quotes, tickers, sectors, accuracy)
+        if watchlist_msgs:
+            send(watchlist_msgs, channel="watchlist")
 
 
 if __name__ == "__main__":
