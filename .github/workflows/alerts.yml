@@ -36,5 +36,7 @@ jobs:
       - run: python alerts.py
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # 속보는 '속보 뉴스봇' 채널로 발송(채널 분리). 미설정 시 코드가 메인으로 폴백.
+          DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # 속보 2차 AI 판정(엄청난 호재/악재·지난/반복 속보 필터)

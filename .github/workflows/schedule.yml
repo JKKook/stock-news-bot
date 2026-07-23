@@ -40,6 +40,10 @@ jobs:
       - run: python main.py
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # 채널 분리 — 마켓 뷰/클로징은 'marketview', 관심종목 표·뉴스는 'watchlist' 채널로.
+          #   (정규 알림 나머지는 위 DISCORD_WEBHOOK_URL=메인 채널. 미설정 시 코드가 메인으로 폴백)
+          DISCORD_MARKETVIEW_WEBHOOK_URL: ${{ secrets.DISCORD_MARKETVIEW_WEBHOOK_URL }}
+          DISCORD_WATCHLIST_WEBHOOK_URL: ${{ secrets.DISCORD_WATCHLIST_WEBHOOK_URL }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
