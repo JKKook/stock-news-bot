@@ -487,11 +487,31 @@ EARNINGS_RESULT_KW = [            # '결과' 신호(프리뷰 아님) — 하나
     "매출", "영업이익", "순이익", "잠정실적", "확정실적", "실적 발표", "실적발표",
     "분기 실적", "분기실적", "어닝 서프라이즈", "어닝서프라이즈", "어닝 쇼크", "호실적", "실적 쇼크",
     "revenue", "eps", "earnings per share", "beats", "missed", "misses",
-    "reported", "reports", "posts", "quarterly results", "q1", "q2", "q3", "q4", "guidance",
+    "reported", "reports", "posts", "quarterly results",
+    # ↑ q1~q4·guidance 제외: 예고/프리뷰 기사에도 흔해 '발표됨' 신호로는 약함(오검출 원인)
 ]
-EARNINGS_EXCLUDE_KW = [           # 프리뷰·전망(발표 전) 제외 — 결과가 아니라 예상
-    "앞두고", "앞둔", "전망", "예상", "기대", "미리보기", "관전 포인트", "프리뷰", "컨센서스 추정",
-    "preview", "ahead of", "expected to", "what to expect", "forecast", "anticipat", "will report",
+EARNINGS_EXCLUDE_KW = [           # 프리뷰·전망·'예정/임박'(발표 전) 제외 — 결과가 아니라 예상·일정
+    # 국내 — 예고/일정 신호(발표된 결과 헤드라인엔 거의 안 쓰이는 표현만 선별)
+    "앞두", "전망", "예상", "기대", "미리보기", "관전 포인트", "프리뷰", "컨센서스 추정",
+    "예정", "오는", "임박", "다음 주", "내주", "다가오", "주목", "촉각",
+    "발표한다", "공개한다", "발표할", "관심 집중",
+    # 해외 — 예고/일정 신호(released 결과 헤드라인엔 안 쓰이는 표현만 — 'due to' 등 오차단 방지)
+    "preview", "ahead of", "expected to", "what to expect", "forecast", "anticipat",
+    "will report", "to report", "to post", "set to", "scheduled", "slated",
+    "upcoming", "next week", "on deck", "poised to", "gearing up", "watch for",
+    "when it reports", "earnings due", "results due", "estimates for",
+]
+# 실적 속보 '참고 URL'은 공신력 있는 곳에서만 — 공식 공시(IR/공시 배포) 우선, 없으면 주요 매체로 폴백.
+#   구글뉴스 RSS 항목의 언론사명(_source)이 아래에 걸리는 기사만 원문 링크로 채택.
+#   Tier1(공식 공시 배포) > Tier2(주요 통신·경제지). 둘 다 없으면 링크 생략(요약만 발송).
+EARNINGS_SOURCE_TIER1 = [        # 1차 출처 — 공식 공시·IR 배포 채널
+    "business wire", "globe newswire", "globenewswire", "pr newswire", "prnewswire",
+    "sec.gov", "u.s. securities", "dart", "금융감독원", "전자공시",
+]
+EARNINGS_SOURCE_TIER2 = [        # 2차 출처 — 주요 통신사·경제 매체(공신력 확보)
+    "reuters", "bloomberg", "cnbc", "wall street journal", "wsj", "financial times",
+    "associated press", "ap news", "barron", "marketwatch", "yahoo finance",
+    "연합뉴스", "연합인포맥스", "한국경제", "매일경제", "서울경제", "이데일리", "조선비즈", "전자신문",
 ]
 
 # (세션별 제외) 한 시장 정규장이 열려 있으면, 닫힌 반대편 시장의 '지수 속보'는 stale → 제외.
@@ -558,6 +578,17 @@ ALERT_SEVERITY_HIGH = [
 ALERT_SEVERITY_MID = [
     "급락", "급등", "쇼크", "강타", "공격", "긴급", "비상", "사상",
     "selloff", "plummet", "tumble", "surge", "soar", "attack", "emergency", "rout",
+]
+
+# ── (시장 급변 속보) '시장별 하루 1회' 제한 ──────────────────────
+#   급락/급등·매도/매수 사이드카·서킷브레이커 등 '시장 급변' 속보가 변동성 큰 날 지수 밴드 알림
+#   (check_indices)과 뉴스 헤드라인(check_news)에서 중복 폭주 → 시장별(코스피=국내/나스닥=미국)
+#   그날 '첫 신호' 1건만 발송하고 나머지는 억제(방향·유형 무관). 상태 shock_day 를 두 경로가 공유.
+ALERT_INDEX_MARKET = {"코스피": "KR", "나스닥": "US"}   # 지수 밴드 속보를 낼 대표 지수(그 외 코스닥·S&P·다우는 제외)
+ALERT_SHOCK_KW = [                                      # 뉴스 헤드라인이 '시장 급변'인지 판정(지정학 제외)
+    "급락", "폭락", "급등", "폭등", "사이드카", "서킷브레이커", "패닉", "쇼크", "붕괴",
+    "crash", "plunge", "plummet", "tumble", "rout", "selloff", "sidecar",
+    "circuit breaker", "surge", "soar", "collapse", "halt",
 ]
 
 # ── (Layer 2) 속보 제외 — 회고·주간·마감 컬럼 ────────────────────

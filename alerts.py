@@ -50,6 +50,34 @@ def _news_market(low: str) -> str | None:
     return None
 
 
+# ── (시장 급변 속보) 시장별 하루 1회 게이트 — 지수 밴드(check_indices)·뉴스(check_news) 공유 ──
+def _shock_market(low: str) -> str | None:
+    """시장 급변 속보의 대상 시장 — 'KR'(코스피 대표)/'US'(나스닥 대표)/None.
+    급변 키워드(ALERT_SHOCK_KW)가 있고 시장이 한쪽으로만 판정될 때만(양쪽·무시장 → None)."""
+    if not any(k in low for k in config.ALERT_SHOCK_KW):
+        return None
+    return _news_market(low)
+
+
+def _shock_seen(state: dict, market: str, today: str) -> bool:
+    """'시장별 하루 1회' 게이트 — 오늘(KST) 이 시장 급변 속보를 이미 보냈으면 True(억제).
+    shock_day = {"date": today, "KR": iso, "US": iso} 를 두 경로가 공유. 날짜 바뀌면 리셋."""
+    sd = state.get("shock_day")
+    if not isinstance(sd, dict) or sd.get("date") != today:
+        sd = {"date": today}
+        state["shock_day"] = sd
+    return bool(sd.get(market))
+
+
+def _shock_mark(state: dict, market: str, today: str) -> None:
+    """이 시장의 오늘 급변 속보를 '발송함'으로 기록 → 같은 날 이후 신호는 억제."""
+    sd = state.get("shock_day")
+    if not isinstance(sd, dict) or sd.get("date") != today:
+        sd = {"date": today}
+        state["shock_day"] = sd
+    sd[market] = datetime.now(timezone.utc).isoformat()
+
+
 def load_state() -> dict:
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -89,27 +117,27 @@ def _title_sim(a: str, b: str) -> float:
 
 # ── 1) 지수 급변 ────────────────────────────────────────────────
 def check_indices(state: dict, today: str, indices: list[dict], kst: datetime) -> list[str]:
-    bands = state.get("index_band", {}) if state.get("day") == today else {}
-    trigger = {n for n, _, _ in config.ALERT_INDICES}  # 급변 트리거는 주식 지수만
+    """(지수 급변 속보) 대표 지수(코스피=국내/나스닥=미국)가 밴드(±5·8·15·20%)를 돌파하면 속보.
+    시장별 하루 1회만(shock_day 공유) — 방향·유형 무관 그날 '첫 신호'만. 코스닥·S&P·다우는 대표에서 제외."""
     alerts = []
     for ix in indices:
-        if ix["name"] not in trigger:
+        market = config.ALERT_INDEX_MARKET.get(ix["name"])   # '코스피'/'나스닥'만 대표(KR/US)
+        if market is None:
             continue
         chg = ix["chg"]
         crossed = max([b for b in config.ALERT_INDEX_BANDS if abs(chg) >= b], default=None)
         if crossed is None:
             continue
-        if crossed > bands.get(ix["name"], 0):
-            bands[ix["name"]] = crossed
-            direction = "급락 🔻" if chg < 0 else "급등 🔺"
-            level = "⚠️ 서킷브레이커/사이드카 수준" if crossed >= 8 else "큰 변동"
-            session = index_session(ix["name"], kst)   # 정규장 / 야간선물 / 장마감
-            alerts.append(
-                f"{ix['flag']} **{ix['name']} {direction} {chg:+.2f}%** · ⏰{session} ({crossed}%↑ 돌파, {level})\n"
-                f"현재 {ix['price']:,.2f} (전일 종가 대비)"
-            )
-    state["index_band"] = bands
-    state["day"] = today
+        if _shock_seen(state, market, today):                # 시장별 하루 1회 — 이미 보냈으면 억제
+            continue
+        direction = "급락 🔻" if chg < 0 else "급등 🔺"
+        level = "⚠️ 서킷브레이커/사이드카 수준" if crossed >= 8 else "큰 변동"
+        session = index_session(ix["name"], kst)   # 정규장 / 야간선물 / 장마감
+        alerts.append(
+            f"{ix['flag']} **{ix['name']} {direction} {chg:+.2f}%** · ⏰{session} ({crossed}%↑ 돌파, {level})\n"
+            f"현재 {ix['price']:,.2f} (전일 종가 대비)"
+        )
+        _shock_mark(state, market, today)                    # 오늘 이 시장 급변 발송 기록
     return alerts
 
 
@@ -331,7 +359,9 @@ def check_earnings(state: dict, kst: datetime, indices: list) -> list[str]:
             feed = feedparser.parse(_gnews_url(query, lang))
         except Exception:
             continue
-        heads, top_link = [], ""
+        heads, cand_links = [], []                  # cand_links: (tier, url) — 공신력 순 채택
+        src_t1 = [s.lower() for s in config.EARNINGS_SOURCE_TIER1]
+        src_t2 = [s.lower() for s in config.EARNINGS_SOURCE_TIER2]
         for e in feed.entries[:15]:
             title = _clean_title(e)
             low = title.lower()
@@ -346,10 +376,17 @@ def check_earnings(state: dict, kst: datetime, indices: list) -> list[str]:
                 continue                                          # 대상 종목이 제목에 실제로 있는지
             shown = title if lang == "ko" else translate_text(title)
             heads.append(shown)
-            if not top_link:
-                top_link = e.get("link", "").strip()
+            # 참고 URL은 '공식 공시(Tier1) > 주요 매체(Tier2)' 출처에서만 — 그 외 매체 링크는 채택 안 함
+            src = _source(e).lower()
+            url = e.get("link", "").strip()
+            if url and any(s in src for s in src_t1):
+                cand_links.append((1, url))
+            elif url and any(s in src for s in src_t2):
+                cand_links.append((2, url))
         if not heads:
             continue
+        # 공신력 순(Tier1 먼저) 첫 링크만 채택 — 신뢰 출처가 하나도 없으면 링크 생략(요약만 발송)
+        top_link = min(cand_links, key=lambda x: x[0])[1] if cand_links else ""
 
         brief = earnings_brief(name, heads[:6]) or heads[0]
         flag = "🇰🇷" if region == "국내" else "🇺🇸"
@@ -409,6 +446,7 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
                    if len(e) == 2 and (now - _parse_dt(e[0])) < dup_window]
     # (세션별 제외) 열려 있는 시장의 반대편(닫힌 시장) 지수 속보는 stale → 제외.
     kst = now + timedelta(hours=9)
+    today = f"{kst:%Y-%m-%d}"                               # 시장 급변 '하루 1회' 기준(KST)
     kospi_open = index_session("코스피", kst) == "정규장"   # KST 평일 09:00~15:30
     us_open = index_session("나스닥", kst) == "정규장"       # KST 밤(미 정규장 근사)
 
@@ -477,6 +515,13 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
         key, fp = c["key"], c["fp"]
         if key in sent:                       # 이번 실행 내 중복 키
             continue
+        # (시장 급변 하루 1회) 급락/급등·사이드카·서킷 등은 시장별(코스피/나스닥) 그날 첫 1건만.
+        #   지수 밴드 속보(check_indices)와 같은 shock_day 를 공유 → 두 경로 합쳐 시장당 1회.
+        smarket = _shock_market(c["title"].lower())
+        if smarket and _shock_seen(state, smarket, today):
+            sent.add(key)
+            fresh_keys.append(key)
+            continue
         # Layer 4) 같은 사건 지문이 window 내 이미 알림됐거나 이번 선정분과 중복이면 억제
         #   (심각도순 선정이라 같은 사건은 '가장 센 제목'이 대표로 남는다)
         if fp and ((events.get(fp) and (now - _parse_dt(events[fp])) < window) or fp in picked_fp):
@@ -504,6 +549,8 @@ def check_news(state: dict, indices: list, weekend: bool = False) -> list[str]:
         block += _market_confirm(c["title"], indices)  # (R2) 지수·지정학 지목 시 시장 반응 확증
         block += _link_line(c["link"])
         alerts.append(block)
+        if smarket:                                   # 이 시장 오늘치 급변 발송 기록 → 이후 억제
+            _shock_mark(state, smarket, today)
         picked_display.append([now.isoformat(), shown])   # 반복 속보 판정용 이력
 
     # 사건 지문: window 지난 항목은 정리(상태 파일 비대화 방지)
